@@ -36,11 +36,11 @@ const int HEAD_SERVO_PIN = 18;
 
 // debug switches
 const bool MOTOR_DEBUG = false;
-const bool LOC_DEBUG = false;
+const bool LOC_DEBUG = true;
 const bool ENC_DEBUG = false;
 const bool HEAD_DEBUG = false;
 const bool PID_DEBUG = false;
-const bool USD_DEBUG = true;
+const bool USD_DEBUG = false;
 
 // scheduler intervals
 const unsigned long MOTOR_PERIOD = 20;          // motor speed
@@ -80,11 +80,6 @@ float xChange = 0, yChange = 0, thetaChange = 0;
 //  goal data
 
 const int NUMBER_OF_GOALS = 1;
-//  float xGoals[NUMBER_OF_GOALS] = {270,300,0,60};
-//  float yGoals[NUMBER_OF_GOALS] = {0,30, 0,0};
-//  float xGoals[NUMBER_OF_GOALS] = {60, 80, -60,0};
-//  float yGoals[NUMBER_OF_GOALS] = {0, 50, -30, 0};
-
 float xGoals[NUMBER_OF_GOALS] = { 500 };
 float yGoals[NUMBER_OF_GOALS] = { 100 };
 int currentGoal = 0;
@@ -118,9 +113,7 @@ unsigned long hsT1, hsT2;
 
 const int NUM_HEAD_POSITIONS = 5;
 
-// 155 > x Looking Right (negative)
-// 155 < x Looking Left  (positive)
-const int HEAD_POSITITIONS[NUM_HEAD_POSITIONS] = { 115, 135, 155, 175, 195 };
+const int HEAD_POSITITIONS[NUM_HEAD_POSITIONS] = { 50, 70, 90, 110, 130 };
 
 // repellant factor for obstacles
 int POS_FACTOR[NUM_HEAD_POSITIONS] = { .25, 1, 4, -1, -.25 };
@@ -197,11 +190,11 @@ float magnitude;
 void setup()
 {
   // put your setup code here, to run once:
-  Serial.begin(57600);
+  Serial.begin(9600);
 
   // init head postion
   headServo.attach(HEAD_SERVO_PIN);
-  headServo.write(185);
+  headServo.write(90);
 
   motors.flipLeftMotor(true);
   motors.flipRightMotor(true);
@@ -410,8 +403,6 @@ double updateP()
 // returns the controllerOutput
 double updateUSD(int currPos)
 {
-
-  double updateValue = 0.0;
 
   // detectionLevel = position magnitude * position multiplier
   detectionLevel = (MAX_DISTANCE - DISTANCES[currPos]) * POS_FACTOR[currPos];
