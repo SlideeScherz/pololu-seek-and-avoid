@@ -30,14 +30,14 @@ double eucDistance(double goalX, double goalY, double posX, double posY)
 const double SPEED_OF_SOUND = 0.034;
 
 // pin assignments
-const int ECHO_PIN = 30;
-const int TRIG_PIN = 17;
-const int HEAD_SERVO_PIN = 0;
+const int TRIG_PIN = 5;
+const int ECHO_PIN = 4;
+const int HEAD_SERVO_PIN = 18;
 
 // debug switches
 const bool MOTOR_DEBUG = false;
-const bool locDebug = false;
-const bool changeDebugger = false;
+const bool LOC_DEBUG = false;
+const bool ENC_DEBUG = false;
 const bool HEAD_DEBUG = false;
 const bool PID_DEBUG = false;
 const bool USD_DEBUG = true;
@@ -55,10 +55,7 @@ const float WHEEL_DIAMETER = 3.2;
 const float WHEEL_CIRCUMFRENCE = 10.0531;
 
 // localization
-float x = 0.0, y = 0.0, theta = 0; // TODO maybe redundant
-
-// current position of robot
-float pos[3] = { x, y, theta };
+float x = 0.0, y = 0.0, theta = 0;
 
 // encoder data
 
@@ -90,20 +87,19 @@ const int NUMBER_OF_GOALS = 1;
 
 float xGoals[NUMBER_OF_GOALS] = { 500 };
 float yGoals[NUMBER_OF_GOALS] = { 100 };
-int count = 0;
-float xGoal = xGoals[count];
-float yGoal = yGoals[count];
-float endDist;
-bool isEndGame = false;
+int currentGoal = 0;
+float xGoal = xGoals[currentGoal];
+float yGoal = yGoals[currentGoal];
+bool goalComplete = false;
 
 // Size of Way Points in cm
 int acceptedError = 3;
 
 // distance from origin
-double G_FROM_O = eucDistance(xGoal, yGoal, x, y);
-float dist = G_FROM_O;
+double goalDistance = eucDistance(xGoal, yGoal, x, y);
+float dist = goalDistance;
 float slowDist = 40;
-const double GO_DIST_FACTOR = G_FROM_O / 2;
+const double GO_DIST_FACTOR = goalDistance / 2;
 
 // ultrasonic data
 
@@ -125,11 +121,14 @@ const int NUM_HEAD_POSITIONS = 5;
 // 155 > x Looking Right (negative)
 // 155 < x Looking Left  (positive)
 const int HEAD_POSITITIONS[NUM_HEAD_POSITIONS] = { 115, 135, 155, 175, 195 };
-int POSITION_MULTIPLIERS[NUM_HEAD_POSITIONS] = { .25, 1, 4, -1, -.25 };
 
-// distances at the head positions
-//{0,0,0,0,0,0,0}
-//{0,0,0}
+// repellant factor for obstacles
+int POS_FACTOR[NUM_HEAD_POSITIONS] = { .25, 1, 4, -1, -.25 };
+
+/**
+ * @brief Distances of objects in head pos array
+ * Init all to max so a false obstacle isnt detected
+ */
 double DISTANCES[NUM_HEAD_POSITIONS] = { MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE };
 
 // head servo data
@@ -184,7 +183,6 @@ double usd = 0;
 
 // object aviodance constants
 double usdetection;
-double posMag;
 
 // Ultra Sonic Detection
 double detectionLevel;
@@ -204,6 +202,10 @@ void setup()
   // init head postion
   headServo.attach(HEAD_SERVO_PIN);
   headServo.write(185);
+
+  motors.flipLeftMotor(true);
+  motors.flipRightMotor(true);
+  encoders.flipEncoders(true);
 
   // Prep US
   pinMode(ECHO_PIN, INPUT);
@@ -293,12 +295,7 @@ void moveHead(double objDist)
 
     // head debug output
     if (HEAD_DEBUG)
-    {
-      Serial.print(currHeadPos);
-      Serial.print(" - ");
-      Serial.println(HEAD_POSITITIONS[currHeadPos]);
-      printDist();
-    }
+      debugHeadServo("headServo,");
 
     /**
      * See next head posttion
@@ -340,23 +337,6 @@ void moveHead(double objDist)
   }
 }
 
-// Prints the array of distnaces
-void printDist()
-{
-  Serial.print("{");
-  // sizeof determines the size of bytes
-  // A long is 4 bytes
-  // Divide the bytes of the array by its data type to get the  array length
-  for (int i = 0; i < sizeof(DISTANCES) / sizeof(long); i++)
-  {
-    Serial.print(" ");
-    Serial.print(DISTANCES[i]);
-    Serial.print(",");
-  } // for
-  Serial.print("}");
-  Serial.println("");
-} // printDist
-
 void checkEncoders()
 {
   encT1 = millis();
@@ -385,38 +365,14 @@ void checkEncoders()
     updateChange();
     gain = updateP();
 
-    if (locDebug)
-    {
-      Serial.print("Left: ");
-      Serial.print(Sl);
-      Serial.print("Right: ");
-      Serial.println(Sr);
+    if (ENC_DEBUG)
+      debugEncoders("Encoders,");
 
-      Serial.print("Temp Sl");
-      Serial.println(tempSl);
-      Serial.print("Temp Sr");
-      Serial.println(tempSr);
-      Serial.print("Travel Distance: ");
-      Serial.println(travelDist);
+    if (PID_DEBUG)
+      debugPID("PID,");
 
-      Serial.print("Goal(x,y): (");
-      Serial.print(xGoal);
-      Serial.print(",");
-      Serial.print(yGoal);
-      Serial.println(")");
-
-      Serial.print("Current position (x,y, theta):  ");
-      Serial.print("(");
-      Serial.print(x);
-      Serial.print(",");
-      Serial.print(y);
-      Serial.print(",");
-      Serial.print(theta);
-      Serial.println("%)");
-      Serial.print("Distance from goal :");
-      Serial.println(dist);
-      Serial.println("############################################");
-    }
+    if (LOC_DEBUG)
+      debugLocation("Location,");
   }
 }
 
@@ -434,18 +390,6 @@ void updateChange()
   y += yChange;
   theta += thetaChange;
   dist = eucDistance(xGoal, yGoal, x, y);
-
-  if (changeDebugger)
-  {
-    Serial.print("sChange :");
-    Serial.println(sChange);
-    Serial.print("thetaChange :");
-    Serial.println(thetaChange);
-    Serial.print("xChange :");
-    Serial.println(xChange);
-    Serial.print("yChange :");
-    Serial.println(yChange);
-  }
 }
 
 double getError(double currentTheta)
@@ -459,19 +403,8 @@ double updateP()
   // negative err --> Right
   err = getError(theta);
 
-  //----------PROPORTION------//
-  double proportional = KP_GAIN * err;
-
-  if (PID_DEBUG)
-  {
-    Serial.println("------PID-----");
-    Serial.print("currAngle:");
-    Serial.println(theta);
-    Serial.print("P: ");
-    Serial.println(proportional);
-  }
-
-  return proportional;
+  return KP_GAIN * err;
+  ;
 }
 
 // returns the controllerOutput
@@ -481,7 +414,7 @@ double updateUSD(int currPos)
   double updateValue = 0.0;
 
   // detectionLevel = position magnitude * position multiplier
-  detectionLevel = (MAX_DISTANCE - DISTANCES[currPos]) * POSITION_MULTIPLIERS[currPos];
+  detectionLevel = (MAX_DISTANCE - DISTANCES[currPos]) * POS_FACTOR[currPos];
 
   // Decides which direction the front will apply towards
   // Note to self calc the middpoint of the array later rather than hard coding it in
@@ -514,16 +447,7 @@ double updateUSD(int currPos)
   }
 
   if (USD_DEBUG)
-  {
-    Serial.print("Pos ");
-    Serial.print(currPos);
-    Serial.print(": ");
-    Serial.println(detectionLevel);
-    Serial.print("US detection:");
-    Serial.println(usdetection);
-    Serial.print("Object very close (when less than 50)");
-    Serial.println(closeObj);
-  }
+    debugUltrasonic("Ultrasonic,");
 
   return usdetection * USD_FACTOR;
 }
@@ -538,23 +462,22 @@ bool isFinished()
 
   if (fin)
   {
-    count++;
-    xGoal = xGoals[count];
-    yGoal = yGoals[count];
+    currentGoal++;
+    xGoal = xGoals[currentGoal];
+    yGoal = yGoals[currentGoal];
 
     // Sets a new Max distance from the new way point
-    G_FROM_O = eucDistance(xGoal, yGoal, x, y);
+    goalDistance = eucDistance(xGoal, yGoal, x, y);
 
-    if (count < NUMBER_OF_GOALS)
+    if (currentGoal < NUMBER_OF_GOALS)
       // buzzer.play("c32");
 
-      if (count == NUMBER_OF_GOALS - 1)
-        isEndGame = true;
+      if (currentGoal == NUMBER_OF_GOALS - 1)
+        goalComplete = true;
 
-      else if (count == NUMBER_OF_GOALS)
+      else if (currentGoal == NUMBER_OF_GOALS)
       {
         // buzzer.play("c32");
-        // buzzer.play("abc");
         motors.setSpeeds(0, 0);
         complete = true;
       }
@@ -574,7 +497,7 @@ void setMotors(double controllerOutput)
     // determine the magnitude of the distance by taking the difference (short distnace = high distance)
     // divide by the DISTANCE_FACTOR to ensure uniform response as MAX_DISTNACE changes
     // This maps the distnace(1 - MAX_RANGE) to 0-100 for the magnitude
-    magnitude = (float)(G_FROM_O - dist) / GO_DIST_FACTOR;
+    magnitude = (float)(goalDistance - dist) / GO_DIST_FACTOR;
     // ex: MAX_DISTANCE = 80, distnace = 40: 80 - 40 = 40/.8 = 50(midrange)
     // ex: MAX_DISTNACE = 160, distance = 40: 160- 40 = 120/1.6 = 75 (top 1/4)
 
@@ -604,14 +527,8 @@ void setMotors(double controllerOutput)
     if (rightSpeed > MOTOR_MAX_SPEED)
       rightSpeed = MOTOR_MAX_SPEED;
 
-    motors.setSpeeds(leftSpeed, rightSpeed);
-    if (MOTOR_DEBUG)
-    {
-      Serial.print("Left: ");
-      Serial.println(leftSpeed);
-      Serial.print("Right: ");
-      Serial.println(rightSpeed);
-    }
+    // motors are backwards
+    motors.setSpeeds(rightSpeed, leftSpeed);
 
     mT2 = mT1;
   }
@@ -635,13 +552,97 @@ double getWheel(double co, int sign)
     wheelSpeed = wheelSpeed * (dist / slowDist);
 
   if (MOTOR_DEBUG)
-  {
-    Serial.println("Base, Mag, and factor");
-    Serial.println((MOTOR_BASE_SPEED - (magnitude * MOTOR_FACTOR)));
-    Serial.println("pid output:");
-    Serial.println(co * sign);
-    Serial.println("True Wheel Speed:  ");
-    Serial.println(wheelSpeed);
-  }
+    debugMotors("Motors");
+
   return wheelSpeed;
+}
+
+void debugLocation(char label[])
+{
+  Serial.print(label);
+  Serial.print(Sl);
+  Serial.print(",");
+  Serial.print(Sr);
+
+  Serial.print(",");
+  Serial.print(tempSl);
+  Serial.print(",");
+  Serial.print(tempSr);
+  Serial.print(",");
+  Serial.print(travelDist);
+
+  Serial.print(xGoal);
+  Serial.print(",");
+  Serial.print(yGoal);
+
+  Serial.print(",");
+  Serial.print(x);
+  Serial.print(",");
+  Serial.print(y);
+  Serial.print(",");
+  Serial.print(theta);
+  Serial.print(",");
+  Serial.println(dist);
+}
+
+void debugMotors(char label[])
+{
+  Serial.print(label);
+
+  Serial.print(leftSpeed);
+  Serial.print(",");
+  Serial.print(rightSpeed);
+
+  Serial.print(",");
+  Serial.print((MOTOR_BASE_SPEED - (magnitude * MOTOR_FACTOR)));
+}
+
+void debugUltrasonic(char label[])
+{
+  Serial.print(label);
+  Serial.print(detectionLevel);
+  Serial.print(",");
+  Serial.print(usdetection);
+  Serial.print(",");
+  Serial.println(closeObj);
+}
+
+void debugPID(char label[])
+{
+  Serial.print(label);
+  Serial.print(theta);
+  Serial.print(",");
+  Serial.println(gain);
+}
+
+void debugDistances(char label[])
+{
+  Serial.print(label);
+  for (int i = 0; i < (sizeof(DISTANCES) / sizeof(long)); i++)
+  {
+    Serial.print(DISTANCES[i]);
+    Serial.print(",");
+  }
+  Serial.println("");
+}
+
+void debugHeadServo(char label[])
+{
+  Serial.print(label);
+  Serial.print(currHeadPos);
+  Serial.print(",");
+  Serial.println(sweepingClockwise);
+}
+
+void debugEncoders(char label[])
+{
+  Serial.print(label);
+  Serial.print(",");
+  Serial.print(sChange);
+  Serial.print(",");
+  Serial.print(thetaChange);
+  Serial.print(",");
+  Serial.print(xChange);
+  Serial.print(",");
+  Serial.println(yChange);
 }
