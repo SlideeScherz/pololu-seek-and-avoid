@@ -9,7 +9,6 @@ Motors motors;
 Servo headServo; //Servo object
 ButtonA buttonA;
 
-
 //-----------------------DISTANCE CALCULATIONS-----------------------//
 unsigned long currentMilllis;
 unsigned long prevMillis;
@@ -60,8 +59,8 @@ const int NUMBER_OF_GOALS = 1;
 //  float yGoals[NUMBER_OF_GOALS] = {0,30, 0,0};
 //  float xGoals[NUMBER_OF_GOALS] = {60, 80, -60,0};
 //  float yGoals[NUMBER_OF_GOALS] = {0, 50, -30, 0};
-float xGoals[NUMBER_OF_GOALS] = { 30 };
-float yGoals[NUMBER_OF_GOALS] = { 30 };
+float xGoals[NUMBER_OF_GOALS] = { 400 };
+float yGoals[NUMBER_OF_GOALS] = { 100 };
 int count = 0;
 float xGoal = xGoals[count];
 float yGoal = yGoals[count];
@@ -103,7 +102,7 @@ unsigned long headPm;
 const unsigned long HEAD_MOVEMENT_PERIOD = 300;
 
 //Head esrvo constants
-const int HEAD_SERVO_PIN = 18;
+const int HEAD_SERVO_PIN = 22;
 const int NUM_HEAD_POSITIONS = 5;
 
 //adjusted the angles so US was facing straight foward.at the middle element
@@ -133,9 +132,9 @@ boolean headDirectionClockwise = true;
 boolean MOTOR_DEBUG = false;
 
 //Motor constants
-const float MOTOR_BASE_SPEED = 150;
-const int MOTOR_MIN_SPEED = 100;
-const int MOTOR_MAX_SPEED = 200;
+const float MOTOR_BASE_SPEED = 100;
+const int MOTOR_MIN_SPEED = 50;
+const int MOTOR_MAX_SPEED = 150;
 
 //start out with the MOTOR_BASE_SPEED
 float leftSpeed = MOTOR_BASE_SPEED;
@@ -253,7 +252,6 @@ void moveHead(double objDist) {
     //adding the distance to the array
     DISTANCES[currHeadPos] = objDist;
 
-
     //head debug output
     if (HEAD_DEBUG) {
       Serial.print(currHeadPos);
@@ -261,7 +259,6 @@ void moveHead(double objDist) {
       Serial.println(HEAD_POSITITIONS[currHeadPos]);
       printDist();
     }//if
-
 
     /**
        See next head posttion
