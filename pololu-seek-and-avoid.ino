@@ -556,8 +556,10 @@ void printDebugHeadings()
   // encoders
   if (ENCODER_DEBUG)
   {
-    Serial.print("countsT1,");
-    Serial.print("countsT2,");
+    Serial.print("countsLeftT1,");
+    Serial.print("countsRightT1,");
+    Serial.print("countsLeftT2,");
+    Serial.print("countsRightT2,");
     Serial.print("sLeftT1,");
     Serial.print("sRightT1,");
     Serial.print("sLeftT2,");
@@ -582,11 +584,11 @@ void printDebugHeadings()
   {
     Serial.print("pingTimeDuration,");
     Serial.print("pingDistance,");
-    Serial.print("0,");
-    Serial.print("1,");
-    Serial.print("2,");
-    Serial.print("3,");
-    Serial.print("4,");
+    Serial.print("d0,");
+    Serial.print("d1,");
+    Serial.print("d2,");
+    Serial.print("d3,");
+    Serial.print("d4,");
     Serial.print("usT1,");
     Serial.print("usT2,");
   }
@@ -595,11 +597,11 @@ void printDebugHeadings()
   Serial.print("rForceLeft,");
   Serial.print("rForceFwd,");
   Serial.print("rForceRight,");
-  Serial.print("0,");
-  Serial.print("1,");
-  Serial.print("2,");
-  Serial.print("3,");
-  Serial.print("4,");
+  Serial.print("d0,");
+  Serial.print("d1,");
+  Serial.print("d2,");
+  Serial.print("d3,");
+  Serial.print("d4,");
 
   Serial.println("");
 }
