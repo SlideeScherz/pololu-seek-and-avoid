@@ -38,10 +38,9 @@ const int ECHO_PIN = 0;
 const int HEAD_SERVO_PIN = 30;
 
 // debug switches
-const bool MOTOR_DEBUG = true;
-const bool ENCODER_DEBUG = true;
+const bool ENCODER_DEBUG = false;
 const bool HEAD_SERVO_DEBUG = true;
-const bool US_DEBUG = true;
+const bool US_DEBUG = false;
 const bool LOG_CSV = true;
 
 // scheduler intervals
@@ -53,7 +52,7 @@ const unsigned long CSV_PERIOD = 50uL;              // print csv row
 const unsigned long HEAD_SERVO_MOVE_PERIOD = 200ul; // call sweep head
 
 // scheduler timers
-unsigned long encodersT1 = 0ul, encodersT2 = 0ul;
+unsigned long encoderT1 = 0ul, encoderT2 = 0ul;
 unsigned long csvT1 = 0ul, csvT2 = 0ul;
 unsigned long motorT1 = 0ul, motorT2 = 0ul;
 unsigned long servoT1 = 0ul, servoT2 = 0ul;
@@ -115,44 +114,34 @@ double posDelta[3] = { 0.0, 0.0, 0.0 };
 int currentGoal = 0;
 
 // len of GOALS array, how many goals we want to navigate to
-const int NUM_GOALS = 1;
+const int NUM_GOALS = 2;
 
 // coordinates of goal
-double goal[2] = { 50.0, 50.0 };
+double goal[2] = { 80.0, 50.0 };
 
 // allow a slight error within this range
 const double GOAL_PRECISION = 1.0;
 
-// starting linear distance from goal. Updated on goal change
-double startGoalDistance = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
-
-// current linear distance from goal. Updated on motor period
-double currentGoalDistance = startGoalDistance;
-
 /* motor data */
-// distance before applying dampening break force
-const double DAMPEN_RANGE = 20.0;
 
 // speed limits
-// TODO FIX
-// const int MOTOR_MIN_SPEED = 50, MOTOR_MAX_SPEED = 150; // turtle
-const int MOTOR_MIN_SPEED = 20, MOTOR_MAX_SPEED = 80; // standard
-
-// init as avg
-const double MOTOR_BASE_SPEED = (MOTOR_MAX_SPEED + MOTOR_MIN_SPEED) / 2;
+const int MOTOR_MIN_SPEED = 40, MOTOR_MAX_SPEED = 100;
 
 // wheelSpeed containers. Set by PID output
 double leftSpeed = MOTOR_MIN_SPEED, rightSpeed = MOTOR_MIN_SPEED;
 
 /* PID data */
 
-const double KP = 20.0;
+const double KP = 27.50;
 
 // suggested PID correction
 double gain = 0.0;
 
 // current theta vs theta of goal. Derived from arctan
-double currentError = 0.0;
+double angleError = 0.0;
+
+// current linear distance from goal. Updated on motor period
+double distanceError = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
 
 // used in calculating error
 double arctanToGoal = 0.0;
@@ -161,8 +150,6 @@ double arctanToGoal = 0.0;
 
 // number of angles in HEAD_POSITIONS array
 constexpr int POS_LEN = 5;
-constexpr int POS_BEGIN = 0;
-constexpr int POS_END = POS_LEN - 1;
 
 // angle servo is currently facing
 int servoAngle = 90;
@@ -181,8 +168,11 @@ const int HEAD_POSITIONS[POS_LEN] = { 130, 110, 90, 70, 50 };
 
 /* repulsive data */
 
-// repellant factor for obstacles
-const double POS_FACTOR[POS_LEN] = { 0.10, 0.20, 1, 0.20, 0.05 };
+/**
+ * repellant factor for obstacles
+ * Leave 90 Degrees *2 since its the only one in fwdForce calculation
+ */
+const double R_FORCE_FACTOR[POS_LEN] = { 0.10, 0.50, 2, 0.50, 0.10 };
 
 double rForceLeft = 0.0;
 double rForceFwd = 0.0;
@@ -210,7 +200,7 @@ double distances[POS_LEN] = { US_MAX_DISTANCE, US_MAX_DISTANCE, US_MAX_DISTANCE,
 void setup()
 {
   Serial.begin(9600);
-  delay(3000);
+  delay(1000);
   printDebugHeadings();
 }
 
@@ -269,7 +259,7 @@ void setServo()
 int cyclePosition(int posItr)
 {
   // check bounds, toggle sweep
-  if (posItr == POS_BEGIN || posItr == POS_END)
+  if (posItr == 0 || posItr == POS_LEN - 1)
     sweepingClockwise = !sweepingClockwise;
 
   // CW: start at 0 then ascend
@@ -347,9 +337,9 @@ float sendPing()
  */
 void readEncoders()
 {
-  encodersT1 = millis();
+  encoderT1 = millis();
 
-  if (encodersT1 > encodersT2 + ENCODER_PERIOD)
+  if (encoderT1 > encoderT2 + ENCODER_PERIOD)
   {
 
     // read current encoder count
@@ -373,7 +363,7 @@ void readEncoders()
     sRightT2 = sRightT1;
 
     // reset timer
-    encodersT2 = encodersT1;
+    encoderT2 = encoderT1;
 
     // send encoder data to calculate x,y,theta position
     localize();
@@ -401,7 +391,7 @@ void localize()
   pos[THETA] += posDelta[THETA];
 
   // update position after getting encoder data
-  currentGoalDistance = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
+  distanceError = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
 
   // send position data to PID controller to get a correction
   gain = getPID(pos[THETA]);
@@ -413,17 +403,16 @@ void localize()
 
 /**
  * get a proportionate correction based on current theta vs goal
- * a positive currentError will suggest a left turn
- * a negative currentError will suggest a right turn
  * @returns void set PIDcorrection to a proportional angle correction
  */
 double getPID(double currentTheta)
 {
   arctanToGoal = atan2(goal[Y] - pos[Y], goal[X] - pos[X]);
 
-  currentError = currentTheta - arctanToGoal;
+  // error magnitude: current state - target state
+  angleError = currentTheta - arctanToGoal;
 
-  return KP * currentError;
+  return KP * angleError;
 }
 
 /**
@@ -432,11 +421,59 @@ double getPID(double currentTheta)
  */
 void getRepulsiveForces(int posItr)
 {
-  rForcesAll[posItr] = distances[posItr] * POS_FACTOR[posItr];
+  // ex 80 - 75 * 1 = 5 (very small, far away)
+  // ex 80 - 5 * 1 = 75 (very close, apply large force)
+  rForcesAll[posItr] = (US_MAX_DISTANCE - distances[posItr]) * R_FORCE_FACTOR[posItr];
 
   rForceLeft = rForcesAll[0] + rForcesAll[1];
   rForceFwd = rForcesAll[2];
   rForceRight = rForcesAll[3] + rForcesAll[4];
+}
+
+/**
+ * set motor speeds using attractive and repulsive fields
+ * @returns void. sets left and right global wheelspeeds.
+ */
+void setMotors()
+{
+  motorT1 = millis();
+
+  if (motorT1 > motorT2 + MOTOR_PERIOD)
+  {
+    // error direction (left or right)
+    // turn left, remember gain will be negative when adding
+    if (gain < 0)
+    {
+      leftSpeed = MOTOR_MIN_SPEED - abs(gain) + rForceLeft;
+      rightSpeed = MOTOR_MIN_SPEED + abs(gain) + rForceRight;
+    }
+
+    // turn right
+    else if (gain > 0)
+    {
+      leftSpeed = MOTOR_MIN_SPEED + gain + rForceLeft;
+      rightSpeed = MOTOR_MIN_SPEED - gain + rForceRight;
+    }
+
+    //handle fwd forces. Slow down
+    leftSpeed = leftSpeed - rForceFwd;
+    rightSpeed = rightSpeed - rForceFwd;
+
+    // check max and min speed limits
+    if (leftSpeed <= MOTOR_MIN_SPEED)
+      leftSpeed = MOTOR_MIN_SPEED;
+    else if (leftSpeed >= MOTOR_MAX_SPEED)
+      leftSpeed = MOTOR_MAX_SPEED;
+
+    if (rightSpeed <= MOTOR_MIN_SPEED)
+      rightSpeed = MOTOR_MIN_SPEED;
+    else if (rightSpeed >= MOTOR_MAX_SPEED)
+      rightSpeed = MOTOR_MAX_SPEED;
+
+    motors.setSpeeds(leftSpeed, rightSpeed);
+
+    motorT2 = motorT1;
+  }
 }
 
 // see if robot is within accepted goal distance
@@ -464,8 +501,9 @@ void checkGoalStatus()
     // cycle next goal
     currentGoal++;
 
-    // update start goal distance
-    startGoalDistance = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
+    // go home
+    goal[X] = 0.0;
+    goal[Y] = 0.0;
 
     // sleep after returning home
     if (currentGoal == NUM_GOALS)
@@ -473,49 +511,6 @@ void checkGoalStatus()
       motors.setSpeeds(0, 0);
       ledGreen(1);
     }
-  }
-}
-
-/**
- * set motor speeds using attractive and repulsive fields
- * @returns void. sets left and right global wheelspeeds.
- */
-void setMotors()
-{
-  motorT1 = millis();
-
-  if (motorT1 > motorT2 + MOTOR_PERIOD)
-  {
-
-    // handle left and right forces
-    leftSpeed = MOTOR_BASE_SPEED + gain + rForceLeft;
-    rightSpeed = MOTOR_BASE_SPEED - gain + rForceRight;
-
-    // handle fwd forces. Slow down
-    leftSpeed = leftSpeed - rForceFwd;
-    rightSpeed = rightSpeed - rForceFwd;
-
-    // reduce wheelspeed if within threshold
-    if (currentGoalDistance <= DAMPEN_RANGE)
-    {
-      leftSpeed *= (currentGoalDistance / DAMPEN_RANGE);
-      rightSpeed *= (currentGoalDistance / DAMPEN_RANGE);
-    }
-
-    // check max and min speed limits
-    if (leftSpeed <= MOTOR_MIN_SPEED)
-      leftSpeed = MOTOR_MIN_SPEED;
-    else if (leftSpeed >= MOTOR_MAX_SPEED)
-      leftSpeed = MOTOR_MAX_SPEED;
-
-    if (rightSpeed <= MOTOR_MIN_SPEED)
-      rightSpeed = MOTOR_MIN_SPEED;
-    else if (rightSpeed >= MOTOR_MAX_SPEED)
-      rightSpeed = MOTOR_MAX_SPEED;
-
-    motors.setSpeeds((int)leftSpeed, (int)rightSpeed);
-
-    motorT2 = motorT1;
   }
 }
 
@@ -535,7 +530,6 @@ void setLEDs(bool Y, bool G, bool R)
 void printDebugHeadings()
 {
   Serial.println(); // nextline
-  Serial.println(__TIMESTAMP__);
 
   // position
   Serial.print("time,");
@@ -544,10 +538,10 @@ void printDebugHeadings()
   Serial.print("T,");
   Serial.print("xGoal,");
   Serial.print("yGoal,");
-  Serial.print("goalDist,");
+  Serial.print("dError,");
   Serial.print("atan,");
-  Serial.print("error,");
-  Serial.print("gain,");
+  Serial.print("aError,");
+  Serial.print("aGain,");
 
   // wheel speeds
   Serial.print("leftSpeed,");
@@ -603,7 +597,7 @@ void printDebugHeadings()
   Serial.print("d3,");
   Serial.print("d4,");
 
-  Serial.println("");
+  Serial.println(__TIMESTAMP__);
 }
 
 // export csv data for plotting and tuning
@@ -627,11 +621,11 @@ void printDebugData()
     Serial.print(",");
     Serial.print(goal[Y]);
     Serial.print(",");
-    Serial.print(currentGoalDistance);
+    Serial.print(distanceError);
     Serial.print(",");
     Serial.print(arctanToGoal);
     Serial.print(",");
-    Serial.print(currentError);
+    Serial.print(angleError);
     Serial.print(",");
     Serial.print(gain);
     Serial.print(",");
