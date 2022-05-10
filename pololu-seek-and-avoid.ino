@@ -44,21 +44,20 @@ const bool ENCODER_DEBUG = false;
 const bool HEAD_SERVO_DEBUG = false;
 const bool PID_DEBUG = false;
 const bool US_DEBUG = false;
-
-/* debugging data */
-bool bLogCSV = true;
+const bool LOG_CSV = true;
 
 // scheduler intervals
 const unsigned long MOTOR_PERIOD = 20ul;       // motor speed
 const unsigned long ENCODER_PERIOD = 20ul;     // count encoders
 const unsigned long US_PERIOD = 15ul;          // ultrasonic ping
 const unsigned long HEAD_SERVO_PERIOD = 200ul; // sweep head
-const unsigned long csvPERIOD = 50uL;
+const unsigned long CSV_PERIOD = 50uL;          // print csv row
 
 // scheduler timers
 unsigned long encodersT1 = 0ul, encodersT2 = 0ul;
 unsigned long csvT1 = 0ul, csvT2 = 0ul;
 unsigned long motorT1 = 0ul, motorT2 = 0ul;
+unsigned long servoTimer1 = 0ul, servoTimer2 = 0ul;
 
 // misc constants
 // TODO data type
@@ -66,8 +65,6 @@ const double SPEED_OF_SOUND = 0.034;
 
 // index for parsing pos, delta, goal arrays
 constexpr int X = 0, Y = 1, THETA = 2;
-
-//============================================
 
 /* encoder data */
 
@@ -78,37 +75,37 @@ long countsLeftT1 = 0, countsRightT1 = 0;
 long countsLeftT2 = 0, countsRightT2 = 0;
 
 // distance traveled by wheel in cm
-float sLeftT1 = 0.0f, sRightT1 = 0.0f;
+double sLeftT1 = 0.0, sRightT1 = 0.0;
 
 // container to store the previous distance traveled
-float sLeftT2 = 0.0f, sRightT2 = 0.0f;
+double sLeftT2 = 0.0, sRightT2 = 0.0;
 
 // difference between current and previous distance traveled
-float sLeftDelta = 0.0f, sRightDelta = 0.0f;
+double sLeftDelta = 0.0, sRightDelta = 0.0;
 
 // change in distance traveled between last 2 intervals
-float sDelta = 0.0f;
+double sDelta = 0.0;
 
 /* wheel data */
 
 // wheel and encoder constants, turtle edition
-const float CLICKS_PER_ROTATION = 12.0f;
-const float GEAR_RATIO = 75.81f;
-const float WHEEL_DIAMETER = 3.2f;
+const double CLICKS_PER_ROTATION = 12.0;
+const double GEAR_RATIO = 75.81;
+const double WHEEL_DIAMETER = 3.2;
 
 // cm traveled each gear tick
-const float DIST_PER_TICK = (WHEEL_DIAMETER * PI) / (CLICKS_PER_ROTATION * GEAR_RATIO);
+const double DIST_PER_TICK = (WHEEL_DIAMETER * PI) / (CLICKS_PER_ROTATION * GEAR_RATIO);
 
 // distance between the 2 drive wheels from the center point of the contact patches
-const float B = 8.5f;
+const double B = 8.5;
 
 /* position data */
 
 // positional polar coordinates
-float pos[3] = { 0.0f, 0.0f, 0.0f };
+double pos[3] = { 0.0, 0.0, 0.0 };
 
 // change in position between last 2 intervals
-float posDelta[3] = { 0.0f, 0.0f, 0.0f };
+double posDelta[3] = { 0.0, 0.0, 0.0 };
 
 /* goal data */
 
@@ -119,46 +116,66 @@ int currentGoal = 0;
 const int NUM_GOALS = 1;
 
 // goal containers
-float xGoals[NUM_GOALS] = { 100.0f };
-float yGoals[NUM_GOALS] = { 80.0f };
+double xGoals[NUM_GOALS] = { 100.0 };
+double yGoals[NUM_GOALS] = { 80.0 };
 
 // coordinates of goal
-float goal[2] = { xGoals[currentGoal], yGoals[currentGoal] };
+double goal[2] = { xGoals[currentGoal], yGoals[currentGoal] };
 
 // allow a slight error within this range
-const float GOAL_PRECISION = 0.75f;
+const double GOAL_PRECISION = 1;
 
 // starting linear distance from goal. Updated on goal change
-float startGoalDistance = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
+double startGoalDistance = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
 
 // current linear distance from goal. Updated on motor period
-float currentGoalDistance = startGoalDistance;
+double currentGoalDistance = startGoalDistance;
 
 /* motor data */
 // distance before applying dampening break force
-const float DAMPEN_RANGE = 20.0f;
+const double DAMPEN_RANGE = 20.0;
 
 // speed limits
-const float MOTOR_MIN_SPEED = 50.0f, MOTOR_MAX_SPEED = 150.0f;
+const int MOTOR_MIN_SPEED = 50, MOTOR_MAX_SPEED = 150;
 
 // speed constants
-const float MOTOR_BASE_SPEED = 100.0f;
+const double MOTOR_BASE_SPEED = 100.0;
 
 // wheelSpeed containers. Set by PID output
-float leftSpeed = MOTOR_MIN_SPEED, rightSpeed = MOTOR_MIN_SPEED;
+double leftSpeed = MOTOR_MIN_SPEED, rightSpeed = MOTOR_MIN_SPEED;
 
 /* PID data */
 // proportional gain
-const float KP = 20.0f;
+const double KP = 20.0;
 
 // suggested PID correction
-float PIDCorrection = 0.0f;
+double PIDCorrection = 0.0;
 
 // current theta vs theta of goal. Derived from arctan
-float currentError = 0.0f;
+double currentError = 0.0;
 
 // used in calculating error
-float arctanToGoal = 0.0f;
+double arctanToGoal = 0.0;
+
+/* head servo data */
+
+// angle servo is currently facing
+int servoAngle = 90;
+
+// index of HEAD_POSITIONS array 
+int servoPosition = 3;
+
+// logic for servo sweeping right or left
+bool sweepingClockwise = true;
+
+// logic to stop US from sending pings if US is moving
+bool servoMoving = false;
+
+// legal head positions (angles) servo can point
+const int HEAD_POSITIONS[7] = { 135, 120, 105, 90, 75, 60, 45 };
+
+// position readings from each angle
+int distances[7] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
 
 void setup()
 {
@@ -174,7 +191,7 @@ void loop()
     readEncoders();
     setMotors();
 
-    if (bLogCSV)
+    if (LOG_CSV)
       logCSV();
   }
 
@@ -185,6 +202,47 @@ void loop()
     delay(1000);
     ledGreen(false);
   }
+}
+
+void setServo()
+{
+  servoTimer1 = millis();
+
+  // poll servo
+  if (servoTimer1 > servoTimer2 + HEAD_SERVO_PERIOD && !servoMoving)
+  {
+    servoMoving = true;
+
+    // get next position
+    servoPosition = cyclePosition(servoPosition);
+    servoAngle = HEAD_POSITIONS[servoPosition];
+    
+    headServo.write(servoAngle);
+
+    // reset timer
+    servoTimer2 = servoTimer1;
+  }
+
+  // allow servo to finish sweep
+  else if (servoTimer1 > servoTimer2 + HEAD_SERVO_PERIOD && servoMoving)
+  {
+    servoMoving = false;
+    servoTimer2 = servoTimer1;
+
+    //if (bDebugHeadServo) headServoDebug("Head Servo");
+  }
+}
+
+int cyclePosition(int index)
+{
+  // check bounds, toggle sweep
+  if (index == 0 || index == 6) sweepingClockwise = !sweepingClockwise;
+
+  // CW: start at 0 then ascend
+  if (sweepingClockwise) return (7 + index + 1) % 7;
+  
+  // CCW: start at 6 then decend
+  else return (7 + index - 1) % 7;
 }
 
 bool goalAccepted(double position, double goal, double errorThreshold)
@@ -243,12 +301,12 @@ void readEncoders()
 void localize()
 {
   // update position using the deltas of each
-  sDelta = (sLeftDelta + sRightDelta) / 2.0f;
+  sDelta = (sLeftDelta + sRightDelta) / 2.0;
   posDelta[THETA] = (sRightDelta - sLeftDelta) / B;
 
   // get polar coordinates of x and y
-  posDelta[X] = sDelta * cos(pos[THETA] + posDelta[THETA] / 2.0f);
-  posDelta[Y] = sDelta * sin(pos[THETA] + posDelta[THETA] / 2.0f);
+  posDelta[X] = sDelta * cos(pos[THETA] + posDelta[THETA] / 2);
+  posDelta[Y] = sDelta * sin(pos[THETA] + posDelta[THETA] / 2);
 
   // update coordinates
   pos[X] += posDelta[X];
@@ -318,6 +376,17 @@ void checkGoalStatus()
   }
 }
 
+/*
+ * set the LEDS to on or off.
+ * @param (color) false (off) or true (on)
+ * @returns void. Sets the pololu LED pins
+ */
+void setLEDs(bool Y, bool G, bool R) {
+  ledYellow(Y);
+  ledGreen(G);
+  ledRed(R);
+}
+
 /**
  * set motor speeds with PID input
  * @returns void. sets left and right global wheelspeeds.
@@ -358,6 +427,21 @@ void setMotors()
 
     motorT2 = motorT1;
   }
+}
+
+// output data to serial monitor
+void debugHeadServo(char label[])
+{
+  Serial.print(label);
+  Serial.print(",");
+  Serial.print(sweepingClockwise);
+  Serial.print(",");
+  Serial.print(servoAngle);
+  Serial.print(",");
+  Serial.print(servoPosition);
+  Serial.print(servoTimer1);
+  Serial.print(",");
+  Serial.println(servoTimer2);
 }
 
 // export encoder data
@@ -414,7 +498,7 @@ void logCSV()
 
   csvT1 = millis();
 
-  if (csvT1 > csvT2 + csvPERIOD)
+  if (csvT1 > csvT2 + CSV_PERIOD)
   {
     Serial.print(millis());
     Serial.print(",");
