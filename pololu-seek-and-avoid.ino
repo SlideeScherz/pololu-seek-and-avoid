@@ -33,13 +33,13 @@ double eucDistance(double x2, double y2, double x1, double y1)
 }
 
 // pin assignments
-const int TRIG_PIN = 17;
-const int ECHO_PIN = 0;
-const int HEAD_SERVO_PIN = 30;
+const int TRIG_PIN = 11;
+const int ECHO_PIN = 5;
+const int HEAD_SERVO_PIN = 4;
 
 // debug switches
 const bool ENCODER_DEBUG = false;
-const bool HEAD_SERVO_DEBUG = true;
+const bool HEAD_SERVO_DEBUG = false;
 const bool US_DEBUG = false;
 const bool LOG_CSV = true;
 
@@ -89,9 +89,8 @@ double sDelta = 0.0;
 // wheel and encoder constants, turtle edition
 const double CLICKS_PER_ROTATION = 12.0;
 
-// TODO: FIX
-// const double GEAR_RATIO = 75.81; //turtle edition
-const double GEAR_RATIO = 29.86; // standard edition
+const double GEAR_RATIO = 75.81; // turtle edition
+// const double GEAR_RATIO = 29.86; // standard edition
 const double WHEEL_DIAMETER = 3.2;
 
 // cm traveled each gear tick
@@ -110,11 +109,7 @@ double posDelta[3] = { 0.0, 0.0, 0.0 };
 
 /* goal data */
 
-// index of GOAL array to select which goal to navigate to
-int currentGoal = 0;
-
-// len of GOALS array, how many goals we want to navigate to
-const int NUM_GOALS = 2;
+bool goalComplete = false;
 
 // coordinates of goal
 double goal[2] = { 80.0, 50.0 };
@@ -200,13 +195,19 @@ double distances[POS_LEN] = { US_MAX_DISTANCE, US_MAX_DISTANCE, US_MAX_DISTANCE,
 void setup()
 {
   Serial.begin(9600);
+
+  // delete this block if not using robot backwards
+  motors.flipLeftMotor(true);
+  motors.flipRightMotor(true);
+  encoders.flipEncoders(true);
+
   delay(1000);
   printDebugHeadings();
 }
 
 void loop()
 {
-  if (currentGoal < NUM_GOALS)
+  if (!goalComplete)
   {
     setServo();
     readUltrasonic(servoPosition);
@@ -222,12 +223,14 @@ void loop()
   // sleep when done
   else
   {
+    motors.setSpeeds(0, 0);
     ledGreen(true);
     delay(1000);
     ledGreen(false);
   }
 }
 
+// adj headServo from next position, determined in cyclePosition
 void setServo()
 {
   servoT1 = millis();
@@ -323,6 +326,10 @@ float sendPing()
   if (pingTimeDuration == 0)
     tempPingDistance = 0.0f;
 
+  // handle max range, skip computation
+  else if (pingTimeDuration >= US_MAX_DISTANCE)
+    tempPingDistance = US_MAX_DISTANCE;
+
   // calculate round trip time of flight
   else
     tempPingDistance = pingTimeDuration * SPEED_OF_SOUND / 2.0;
@@ -403,7 +410,7 @@ void localize()
 
 /**
  * get a proportionate correction based on current theta vs goal
- * @returns void set PIDcorrection to a proportional angle correction
+ * @returns double proportional angle correction
  */
 double getPID(double currentTheta)
 {
@@ -444,14 +451,14 @@ void setMotors()
   {
     /**
      * if gain > 0, gain will be negative when adding
-     * gain > 0 ex. turning right. 
+     * gain > 0 ex. turning right.
      * left = minSpeed + (-30.14) subtracting
      * right = minSpeed - (-30.14) adding
-     */ 
+     */
     leftSpeed = MOTOR_MIN_SPEED + gain + rForceLeft;
     rightSpeed = MOTOR_MIN_SPEED - gain + rForceRight;
 
-    //handle fwd forces. Slow down
+    // handle fwd forces. Slow down
     leftSpeed = leftSpeed - rForceFwd;
     rightSpeed = rightSpeed - rForceFwd;
 
@@ -466,6 +473,7 @@ void setMotors()
     else if (rightSpeed >= MOTOR_MAX_SPEED)
       rightSpeed = MOTOR_MAX_SPEED;
 
+    // do not adjust regardless of fwd or backwards use
     motors.setSpeeds(leftSpeed, rightSpeed);
 
     motorT2 = motorT1;
@@ -491,35 +499,11 @@ void checkGoalStatus()
   // check completed goal and set status
   if (xAccepted && yAccepted)
   {
-
+    goalComplete = true;
     buzzer.play("c32");
-
-    // cycle next goal
-    currentGoal++;
-
-    // go home
-    goal[X] = 0.0;
-    goal[Y] = 0.0;
-
-    // sleep after returning home
-    if (currentGoal == NUM_GOALS)
-    {
-      motors.setSpeeds(0, 0);
-      ledGreen(1);
-    }
+    motors.setSpeeds(0, 0);
+    ledGreen(1);
   }
-}
-
-/*
- * set the LEDS to on or off.
- * @param (color) false (off) or true (on)
- * @returns void. Sets the pololu LED pins
- */
-void setLEDs(bool Y, bool G, bool R)
-{
-  ledYellow(Y);
-  ledGreen(G);
-  ledRed(R);
 }
 
 // headings for csv export
