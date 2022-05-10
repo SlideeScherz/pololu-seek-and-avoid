@@ -176,6 +176,17 @@ bool servoMoving = false;
 // legal head positions (angles) servo can point
 const int HEAD_POSITIONS[POS_LEN] = { 130, 110, 90, 70, 50 };
 
+/* repulsive data */
+
+// USD constant
+const double USD_FACTOR = 13.0;
+
+// repellant factor for obstacles
+const double POS_FACTOR[POS_LEN] = { .25, 1, 4, -1, -.25 };
+
+// repellant factor for obstacles
+const double REPULSIVE_FORCES[POS_LEN] = { };
+
 /* us data */
 
 const double US_MAX_DISTANCE = 80.0;
@@ -405,6 +416,46 @@ double getPID(double currentTheta)
   currentError = currentTheta - arctanToGoal;
 
   return KP * currentError;
+}
+
+// returns the controllerOutput
+double avoid(int currPos)
+{
+
+  // detectionLevel = position magnitude * position multiplier
+  detectionLevel = (MAX_DISTANCE - DISTANCES[currPos]) * POS_FACTOR[currPos];
+
+  // Decides which direction the front will apply towards
+  // Note to self calc the middpoint of the array later rather than hard coding it in
+  if (currPos == 2)
+  {
+    closeObj = detectionLevel;
+
+    // Determines which side has the most obsticles
+    // Negative --> Go Right
+    if (usdetection < 0)
+      detectionLevels[currPos] = detectionLevel * -1;
+    // Postive --> Go Left
+    else
+    {
+      detectionLevels[currPos] = detectionLevel;
+    }
+  }
+  // Usual Case --> calcualtes the rest of the postions
+  else
+  {
+    detectionLevels[currPos] = detectionLevel;
+  }
+
+  // resets the usdetection
+  usdetection = 0;
+  // Calculates the new USD
+  for (int i = 0; i < sizeof(detectionLevels) / sizeof(double); i++)
+  {
+    usdetection += detectionLevels[i];
+  }
+
+  return usdetection * USD_FACTOR;
 }
 
 // see if robot is within accepted goal distance
