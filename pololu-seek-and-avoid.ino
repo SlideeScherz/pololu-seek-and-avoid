@@ -132,7 +132,7 @@ double leftSpeed = MOTOR_MIN_SPEED, rightSpeed = MOTOR_MIN_SPEED;
 
 /* PID data */
 
-const double KP = 27.50;
+const double KP = 55.0;
 
 // suggested PID correction
 double gain = 0.0;
@@ -432,6 +432,8 @@ void getRepulsiveForces(int posItr)
 
 /**
  * set motor speeds using attractive and repulsive fields
+ * error direction negative = turn left
+ * error direction positive = turn right
  * @returns void. sets left and right global wheelspeeds.
  */
 void setMotors()
@@ -440,20 +442,14 @@ void setMotors()
 
   if (motorT1 > motorT2 + MOTOR_PERIOD)
   {
-    // error direction (left or right)
-    // turn left, remember gain will be negative when adding
-    if (gain < 0)
-    {
-      leftSpeed = MOTOR_MIN_SPEED - abs(gain) + rForceLeft;
-      rightSpeed = MOTOR_MIN_SPEED + abs(gain) + rForceRight;
-    }
-
-    // turn right
-    else if (gain > 0)
-    {
-      leftSpeed = MOTOR_MIN_SPEED + gain + rForceLeft;
-      rightSpeed = MOTOR_MIN_SPEED - gain + rForceRight;
-    }
+    /**
+     * if gain > 0, gain will be negative when adding
+     * gain > 0 ex. turning right. 
+     * left = minSpeed + (-30.14) subtracting
+     * right = minSpeed - (-30.14) adding
+     */ 
+    leftSpeed = MOTOR_MIN_SPEED + gain + rForceLeft;
+    rightSpeed = MOTOR_MIN_SPEED - gain + rForceRight;
 
     //handle fwd forces. Slow down
     leftSpeed = leftSpeed - rForceFwd;
