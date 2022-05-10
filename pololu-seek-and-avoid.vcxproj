@@ -119,7 +119,7 @@
   </ImportGroup>
   <ProjectExtensions>
     <VisualStudio>
-      <UserProperties arduino.upload.port="COM5" config.Debug.customdebug_pololu-a-star_a-star32U4_debugger_type="universal" />
+      <UserProperties arduino.upload.port="COM3" config.Debug.customdebug_pololu-a-star_a-star32U4_debugger_type="universal" />
     </VisualStudio>
   </ProjectExtensions>
 </Project>
