@@ -29,8 +29,8 @@ const float WHEEL_CIRCUMFRENCE = 10.0531;
 //-----------------LOCATION INITS---------------------//
 
 //location debugger
-boolean locDebug = false;
-boolean changeDebugger = false;
+bool locDebug = false;
+bool changeDebugger = false;
 
 //right and left wheel constants
 float b = 8.5;
@@ -52,26 +52,27 @@ float thetaChange = 0;
 float xChange = 0;
 float yChange = 0;
 
+double eucDist(double x2, double y2, double x1, double y1)
+{
+  return sqrt(sq(x2 - x1) + sq(y2 - y1));
+}
+
 //500 100
 // goals
 const int NUMBER_OF_GOALS = 1;
-//  float xGoals[NUMBER_OF_GOALS] = {270,300,0,60};
-//  float yGoals[NUMBER_OF_GOALS] = {0,30, 0,0};
-//  float xGoals[NUMBER_OF_GOALS] = {60, 80, -60,0};
-//  float yGoals[NUMBER_OF_GOALS] = {0, 50, -30, 0};
 float xGoals[NUMBER_OF_GOALS] = { 400 };
-float yGoals[NUMBER_OF_GOALS] = { 100 };
+float yGoals[NUMBER_OF_GOALS] = { -60 };
 int count = 0;
 float xGoal = xGoals[count];
 float yGoal = yGoals[count];
 float endDist;
-boolean isEndGame = false;
+bool isEndGame = false;
 
 //Size of Way Points in cm
 int leeWay = 3;
 
 //distance from origin
-double G_FROM_O = sqrt(sq(xGoal - x) + sq(y - yGoal));
+double G_FROM_O = eucDist(xGoal, yGoal, x, y);
 float dist = G_FROM_O;
 float slowDist = 40;
 const double GO_DIST_FACTOR = G_FROM_O / 2;
@@ -90,51 +91,44 @@ const float STOP_DISTANCE = 10;
 //Ultrasonic timing
 unsigned long usCurrMil;
 unsigned long usPrevMil;
-const unsigned long US_PERIOD = 50; // Time to wait for 1st ultra sound to activate
+const unsigned long US_PERIOD = 20; // Time to wait for 1st ultra sound to activate
 
 //-------------------------Servo--------------------------------//
 //debugger switch: HEAD_DEBUG
-const boolean HEAD_DEBUG = false;
+const bool HEAD_DEBUG = false;
 
 //Head Servo Timing
 unsigned long headCm;
 unsigned long headPm;
-const unsigned long HEAD_MOVEMENT_PERIOD = 300;
+const unsigned long HEAD_MOVEMENT_PERIOD = 200;
 
 //Head esrvo constants
 const int HEAD_SERVO_PIN = 22;
 const int NUM_HEAD_POSITIONS = 5;
 
 //adjusted the angles so US was facing straight foward.at the middle element
-//{140,130,120,110,100,25,25}
-//{113,98,83}
 //155 > x Looking Right (negative)
 //155 < x Looking Left  (positive)
-//Normal Array {115,135,155,175,195}
-//Test{105,155,205}
-const int HEAD_POSITITIONS[NUM_HEAD_POSITIONS] = { 50, 70, 90, 110, 130 };
+const int HEAD_POSITITIONS[NUM_HEAD_POSITIONS] = { 40, 70, 90, 110, 130 };
 int POSITION_MULTIPLIERS[NUM_HEAD_POSITIONS] = { .25, 1, 4, -1, -.25 };
 
 //distances at the head positions
-//{0,0,0,0,0,0,0}
-//{0,0,0}
 double DISTANCES[NUM_HEAD_POSITIONS] = { MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE };
 
 //head servo data
-boolean headDirectionClcokwise = true;
-int currHeadPos = 0;
+int currHeadPos = 2;
 
 //head servo data
-boolean headDirectionClockwise = true;
+bool headDirectionClockwise = true;
 
 //------------------Motor--------------------------//
 //debugger switch: Motor Debg
-boolean MOTOR_DEBUG = false;
+bool MOTOR_DEBUG = false;
 
 //Motor constants
-const float MOTOR_BASE_SPEED = 100;
+const float MOTOR_BASE_SPEED = 75;
 const int MOTOR_MIN_SPEED = 50;
-const int MOTOR_MAX_SPEED = 150;
+const int MOTOR_MAX_SPEED = 125;
 
 //start out with the MOTOR_BASE_SPEED
 float leftSpeed = MOTOR_BASE_SPEED;
@@ -154,8 +148,8 @@ const unsigned long MOTOR_PERIOD = 20;
 double newDist = MAX_DISTANCE;
 
 //debugger switch: PID debugg
-boolean PID_DEBUG = false;
-boolean USD_DEBUG = true;
+bool PID_DEBUG = false;
+bool USD_DEBUG = false;
 
 //USD constant
 double kusd = 13;
@@ -164,7 +158,7 @@ double kusd = 13;
 double closeObj = 1000;
 
 //PID constants
-double kp = 500;
+double kp = 100;
 
 //PID calulated values
 double pro = 1;
@@ -383,7 +377,7 @@ void updateChange() {
   x += xChange;
   y += yChange;
   theta += thetaChange;
-  dist = sqrt(sq(xGoal - x) + sq(y - yGoal));
+  dist = eucDist(xGoal, yGoal, x, y);
 
 
   if (changeDebugger) {
@@ -426,13 +420,12 @@ double updateP() {
 //returns the controllerOutput
 double updateUSD(int currPos) {
 
-  double updateValue;
+  double updateValue = 0.0;
 
   //detectionLevel = position magnitude * position multiplier
   detectionLevel = (MAX_DISTANCE - DISTANCES[currPos]) * POSITION_MULTIPLIERS[currPos];
 
   //Decides which direction the front will apply towards
-  //Note to self calc the middpoint of the array later rather than hard coding it in
   if (currPos == 2) {
     closeObj = detectionLevel;
 
@@ -475,9 +468,9 @@ double updateUSD(int currPos) {
 }//Update PID
 
 //Identifies when the robot reaches the goal
-boolean isFinished() {
-  boolean fin = false;
-  boolean complete = false;
+bool isFinished() {
+  bool fin = false;
+  bool complete = false;
   if ((xGoal - leeWay <= x && xGoal + leeWay >= x) && (yGoal - leeWay <= y && yGoal + leeWay >= y))
     fin = true;
 
@@ -487,7 +480,7 @@ boolean isFinished() {
     yGoal = yGoals[count];
 
     //Sets a new Max distance from the new way point
-    G_FROM_O = sqrt(sq(xGoal - x) + sq(y - yGoal));
+    G_FROM_O = eucDist(xGoal, yGoal, x, y);
 
     if (count < NUMBER_OF_GOALS)
       buzzer.play("c32");
@@ -544,6 +537,7 @@ void setMotors(double controllerOutput) {
     if (rightSpeed > MOTOR_MAX_SPEED) rightSpeed = MOTOR_MAX_SPEED;
 
     motors.setSpeeds(leftSpeed, rightSpeed);
+
     if (MOTOR_DEBUG) {
       Serial.print("Left: ");
       Serial.println(leftSpeed);
