@@ -1,3 +1,14 @@
+/**
+ * Name: pololu_seek_and_avoid.ino
+ * Created: 5/9/2022 12:36:13 AM
+ * Author: Team Five
+ *
+ * All distance calculations done in CM.
+ * All timer data will be in milliseconds
+ * Time and delay for ulatrasonic sending and receiving pings will be MICROSECONDS. See Docs
+ * Any reference to headServo will be for the sweeping servo the ultrasonic is attached to. Not a wheel motor.
+ */
+
 #include <Pololu3piPlus32U4.h>
 #include <Servo.h>
 
@@ -6,587 +17,429 @@ using namespace Pololu3piPlus32U4;
 Encoders encoders;
 Buzzer buzzer;
 Motors motors;
-Servo headServo; //Servo object
-ButtonA buttonA;
+Servo headServo;
 
-unsigned long currentMilllis;
-unsigned long prevMillis;
-const unsigned long PERIOD = 20;
-long countsLeft = 0;
-long countsRight = 0;
-long prevLeft = 0;
-long prevRight = 0;
-
-const float CLICKS_PER_ROTATION = 12;
-const float GEAR_RATIO = 75.81F;
-const float WHEEL_DIAMETER = 3.2;
-const float WHEEL_CIRCUMFRENCE = 10.0531;
-
-
-bool locDebug = false;
-bool changeDebugger = false;
-
-float b = 8.5;
-float prevSl = 0.0F;
-float prevSr = 0.0F;
-float tempSl = 0.0F;
-float tempSr = 0.0F;
-float Sl = 0.0F;
-float Sr = 0.0F;
-float x = 0.0;
-float y = 0.0;
-float theta = 0;
-float pos[3] = { x, y, theta };
-
-float travelDist = 0;
-float sChange = 0;
-float thetaChange = 0;
-float xChange = 0;
-float yChange = 0;
-
-double eucDist(double x2, double y2, double x1, double y1)
+/**
+ * @brief Calculate Euclidian distance
+ * @param x2 goal x
+ * @param y2 goal y
+ * @param x1 current x
+ * @param y1 current y
+ * @return double distance from target points
+ */
+double eucDistance(double x2, double y2, double x1, double y1)
 {
   return sqrt(sq(x2 - x1) + sq(y2 - y1));
 }
 
-const int NUMBER_OF_GOALS = 1;
-float xGoals[NUMBER_OF_GOALS] = { 400 };
-float yGoals[NUMBER_OF_GOALS] = { -60 };
-int count = 0;
-float xGoal = xGoals[count];
-float yGoal = yGoals[count];
-float endDist;
-bool isEndGame = false;
-
-int leeWay = 3;
-
-double G_FROM_O = eucDist(xGoal, yGoal, x, y);
-float dist = G_FROM_O;
-float slowDist = 40;
-const double GO_DIST_FACTOR = G_FROM_O / 2;
-
-const int ECHO_PIN = 4;
+// pin assignments
 const int TRIG_PIN = 5;
+const int ECHO_PIN = 4;
+const int HEAD_SERVO_PIN = 18;
 
-//Ultrasonic Mic
-const int MAX_DISTANCE = 80; //(MAX_DISTANCE cm / 2 meters)
+// debug switches
+const bool MOTOR_DEBUG = false;
+const bool LOCATION_DEBUG = false;
+const bool ENCODER_DEBUG = false;
+const bool HEAD_SERVO_DEBUG = false;
+const bool PID_DEBUG = false;
+const bool US_DEBUG = false;
 
-// Determine the normalization factor based on the MAX_DISTANCE
-const float DISTANCE_FACTOR = MAX_DISTANCE / 100;
-const float STOP_DISTANCE = 10;
+/* debugging data */
+bool bLogCSV = true;
 
-//Ultrasonic timing
-unsigned long usCurrMil;
-unsigned long usPrevMil;
-const unsigned long US_PERIOD = 20; // Time to wait for 1st ultra sound to activate
+// scheduler intervals
+const unsigned long MOTOR_PERIOD = 20ul;       // motor speed
+const unsigned long ENCODER_PERIOD = 20ul;     // count encoders
+const unsigned long US_PERIOD = 15ul;          // ultrasonic ping
+const unsigned long HEAD_SERVO_PERIOD = 200ul; // sweep head
+const unsigned long csvPERIOD = 50uL;
 
-//-------------------------Servo--------------------------------//
-//debugger switch: HEAD_DEBUG
-const bool HEAD_DEBUG = false;
+// scheduler timers
+unsigned long encodersT1 = 0ul, encodersT2 = 0ul;
+unsigned long csvT1 = 0ul, csvT2 = 0ul;
+unsigned long motorT1 = 0ul, motorT2 = 0ul;
 
-//Head Servo Timing
-unsigned long headCm;
-unsigned long headPm;
-const unsigned long HEAD_MOVEMENT_PERIOD = 200;
+// misc constants
+// TODO data type
+const double SPEED_OF_SOUND = 0.034;
 
-//Head esrvo constants
-const int HEAD_SERVO_PIN = 22;
-const int NUM_HEAD_POSITIONS = 5;
+// index for parsing pos, delta, goal arrays
+constexpr int X = 0, Y = 1, THETA = 2;
 
-//adjusted the angles so US was facing straight foward.at the middle element
-const int HEAD_POSITITIONS[NUM_HEAD_POSITIONS] = { 50, 70, 90, 110, 130 };
-int POSITION_MULTIPLIERS[NUM_HEAD_POSITIONS] = { .25, 1, 4, -1, -.25 };
+//============================================
 
-//distances at the head positions
-double DISTANCES[NUM_HEAD_POSITIONS] = { MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE };
+/* encoder data */
 
-//head servo data
-int currHeadPos = 2;
+// encoder counts
+long countsLeftT1 = 0, countsRightT1 = 0;
 
-//head servo data
-bool headDirectionClockwise = true;
+// container to store the previous counts
+long countsLeftT2 = 0, countsRightT2 = 0;
 
-//------------------Motor--------------------------//
-//debugger switch: Motor Debg
-bool MOTOR_DEBUG = false;
+// distance traveled by wheel in cm
+float sLeftT1 = 0.0f, sRightT1 = 0.0f;
 
-//Motor constants
-const float MOTOR_BASE_SPEED = 75;
-const int MOTOR_MIN_SPEED = 50;
-const int MOTOR_MAX_SPEED = 125;
+// container to store the previous distance traveled
+float sLeftT2 = 0.0f, sRightT2 = 0.0f;
 
-//start out with the MOTOR_BASE_SPEED
-float leftSpeed = MOTOR_BASE_SPEED;
-float rightSpeed = MOTOR_BASE_SPEED;
+// difference between current and previous distance traveled
+float sLeftDelta = 0.0f, sRightDelta = 0.0f;
 
-// Determine the normalization factor based on Motor_Based_Speed
-const float MOTOR_FACTOR = MOTOR_BASE_SPEED / 100;
+// change in distance traveled between last 2 intervals
+float sDelta = 0.0f;
 
-//Motor timing
-unsigned long motorCurrMil;
-unsigned long motorPrevMil;
-//Time to wait for adjusting the motor speed
-const unsigned long MOTOR_PERIOD = 20;
-//------------P & USdetection------------------//
+/* wheel data */
 
-//initializes so there is a value the first time moveHead runs
-double newDist = MAX_DISTANCE;
+// wheel and encoder constants, turtle edition
+const float CLICKS_PER_ROTATION = 12.0f;
+const float GEAR_RATIO = 75.81f;
+const float WHEEL_DIAMETER = 3.2f;
 
-//debugger switch: PID debugg
-bool PID_DEBUG = false;
-bool USD_DEBUG = false;
+// cm traveled each gear tick
+const float DIST_PER_TICK = (WHEEL_DIAMETER * PI) / (CLICKS_PER_ROTATION * GEAR_RATIO);
 
-//USD constant
-double kusd = 5;
+// distance between the 2 drive wheels from the center point of the contact patches
+const float B = 8.5f;
 
-//determines when an object is WAY too close
-double closeObj = 1000;
+/* position data */
 
-//PID constants
-double kp = 250;
+// positional polar coordinates
+float pos[3] = { 0.0f, 0.0f, 0.0f };
 
-//PID calulated values
-double pro = 1;
+// change in position between last 2 intervals
+float posDelta[3] = { 0.0f, 0.0f, 0.0f };
 
-//error
-double err = 0;
+/* goal data */
 
-double usd = 0;
+// index of GOAL array to select which goal to navigate to
+int currentGoal = 0;
 
-//object aviodance constants
-double usdetection;
-double posMag;
+// len of GOALS array, how many goals we want to navigate to
+const int NUM_GOALS = 1;
 
-//Ultra Sonic Detection
-double detectionLevel;
-double detectionLevels[NUM_HEAD_POSITIONS] = { 0, 0, 0, 0, 0 };
+// goal containers
+float xGoals[NUM_GOALS] = { 100.0f };
+float yGoals[NUM_GOALS] = { 80.0f };
 
-//limits
-double detectionMax = 100;
-double detectionMin = -100;
+// coordinates of goal
+float goal[2] = { xGoals[currentGoal], yGoals[currentGoal] };
 
-float magnitude;
+// allow a slight error within this range
+const float GOAL_PRECISION = 0.75f;
 
-//----------------------Set Up-------------------------------//
-void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(57600);
+// starting linear distance from goal. Updated on goal change
+float startGoalDistance = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
 
-  // init head postion
-  headServo.attach(HEAD_SERVO_PIN);
-  headServo.write(90);
+// current linear distance from goal. Updated on motor period
+float currentGoalDistance = startGoalDistance;
 
-  motors.flipLeftMotor(true);
-  motors.flipRightMotor(true);
-  encoders.flipEncoders(true);
+/* motor data */
+// distance before applying dampening break force
+const float DAMPEN_RANGE = 20.0f;
 
-  //Prep US
-  pinMode(ECHO_PIN, INPUT);
-  pinMode(TRIG_PIN, OUTPUT);
-  delay(1000);
-  buzzer.play("c32");
+// speed limits
+const float MOTOR_MIN_SPEED = 50.0f, MOTOR_MAX_SPEED = 150.0f;
+
+// speed constants
+const float MOTOR_BASE_SPEED = 100.0f;
+
+// wheelSpeed containers. Set by PID output
+float leftSpeed = MOTOR_MIN_SPEED, rightSpeed = MOTOR_MIN_SPEED;
+
+/* PID data */
+// proportional gain
+const float KP = 20.0f;
+
+// suggested PID correction
+float PIDCorrection = 0.0f;
+
+// current theta vs theta of goal. Derived from arctan
+float currentError = 0.0f;
+
+// used in calculating error
+float arctanToGoal = 0.0f;
+
+void setup()
+{
+  Serial.begin(9600);
+  delay(3000);
+  printCSVHeadings();
 }
 
-void loop() {
-
-  if (!isFinished()) {
-    moveHead(newDist);
-    checkEncoders();
-    setMotors(pro + usd);
-    newDist = usReadCm();
-  }//if
-
-  else {
-    motors.setSpeeds(0, 0);
-
-    buzzer.play("c34");
-    delay(100000);
-  }//else
-
-  //Allows me to reset the location for debugging purposes
-  if (buttonA.isPressed()) {
-    usdetection = 0;
-    Sl = 0;
-    Sr = 0;
-    x = 0;
-    y = 0;
-    theta = 0;
-  }//if
-}//loop
-
-//Interprets the reading on the Ultra Sonic as a distance
-double usReadCm() {
-  usCurrMil = millis();
-  if (usCurrMil > usPrevMil + US_PERIOD) {
-
-    //Clears the TRIG_PIN (set low)
-    digitalWrite(TRIG_PIN, LOW);
-    delayMicroseconds(2);
-
-    //Sets the TRIG_PIN HIGH(Active) for 10 microseconds
-    digitalWrite(TRIG_PIN, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(TRIG_PIN, LOW);
-
-    //Reads the ECHO_PIN, returns the sound wave travel time in microseconds
-    //note the durration (38000 microsec) that will allow for reading up max distance supported by the sensor
-    double duration = pulseIn(ECHO_PIN, HIGH, 38000);
-
-    //calc the distance
-    double distance = duration * 0.034 / 2; //Time of flight equation: Speed of sound wave divided by 2
-
-    //apply limits
-    if (distance > MAX_DISTANCE) distance = MAX_DISTANCE;
-    if (distance == 0) distance = MAX_DISTANCE;
-
-    //update the prevMillis
-    usPrevMil = usCurrMil;
-
-    return distance;
-
-  }//if
-}//usReadCm
-
-//moves the US mounted on the servo
-void moveHead(double objDist) {
-  headCm = millis();
-
-  if (headCm > headPm + HEAD_MOVEMENT_PERIOD) {
-
-    //position head to currrent postion in array
-    headServo.write(HEAD_POSITITIONS[currHeadPos]);
-    //adding the distance to the array
-    DISTANCES[currHeadPos] = objDist;
-
-    //head debug output
-    if (HEAD_DEBUG) {
-      Serial.print(currHeadPos);
-      Serial.print(" - ");
-      Serial.println(HEAD_POSITITIONS[currHeadPos]);
-      printDist();
-    }//if
-
-    /**
-       See next head posttion
-       Moves Servo to the next head Position and changes directions when needed
-    */
-    if (headDirectionClockwise) {
-      if (currHeadPos >= (NUM_HEAD_POSITIONS - 1)) {
-        headDirectionClockwise = !headDirectionClockwise;
-        currHeadPos--;
-      }//if
-      else {
-        currHeadPos++;
-      }
-    }//if
-
-    else {
-      if (currHeadPos <= 0) {
-        headDirectionClockwise = !headDirectionClockwise;
-        currHeadPos++;
-      }//if
-
-      else {
-        currHeadPos--;
-      }
-    }//else
-
-    //Updates the USD here so usd only updates when there is a new reading from the US
-    //Also allows this reading to be independent from Proportion
-    usd = updateUSD(currHeadPos);
-
-    //reset previous millis
-    headPm = headCm;
-  }//if
-}//moveHead
-
-//Prints the array of distnaces
-void printDist() {
-  Serial.print("{");
-  //sizeof determines the size of bytes
-  //A long is 4 bytes
-  //Divide the bytes of the array by its data type to get the  array length
-  for (int i = 0; i < sizeof(DISTANCES) / sizeof(long); i++)
+void loop()
+{
+  if (currentGoal < NUM_GOALS)
   {
-    Serial.print(" ");
-    Serial.print(DISTANCES[i]);
-    Serial.print(",");
-  }//for
-  Serial.print("}");
-  Serial.println("");
-}//printDist
+    readEncoders();
+    setMotors();
 
-void checkEncoders() {
-  currentMilllis = millis();
+    if (bLogCSV)
+      logCSV();
+  }
 
-  if (currentMilllis > prevMillis + PERIOD)
+  // sleep when done
+  else
   {
-    countsLeft += encoders.getCountsAndResetLeft();
-    countsRight += encoders.getCountsAndResetRight();
-
-    //Saves the previous values of Sl and Sr
-    prevSl = Sl;
-    prevSr = Sr;
-
-    //Calculates the distance of the left and right wheel
-    Sl += ((countsLeft - prevLeft) / (CLICKS_PER_ROTATION * GEAR_RATIO) * WHEEL_CIRCUMFRENCE);
-    Sr += ((countsRight - prevRight) / (CLICKS_PER_ROTATION * GEAR_RATIO) * WHEEL_CIRCUMFRENCE);
-
-    tempSl = Sl - prevSl;
-    tempSr = Sr - prevSr;
-
-    prevLeft = countsLeft;
-    prevRight = countsRight;
-    prevMillis = currentMilllis;
-
-    //udpates when the time period passes
-    updateChange();
-    pro = updateP();
-
-    if (locDebug) {
-      Serial.print("Left: ");
-      Serial.print(Sl);
-      Serial.print("Right: ");
-      Serial.println(Sr);
-
-      Serial.print("Temp Sl");
-      Serial.println(tempSl);
-      Serial.print("Temp Sr");
-      Serial.println(tempSr);
-      Serial.print("Travel Distance: ");
-      Serial.println(travelDist);
-
-      Serial.print("Goal(x,y): (");
-      Serial.print(xGoal);
-      Serial.print(",");
-      Serial.print(yGoal);
-      Serial.println(")");
-
-      Serial.print("Current position (x,y, theta):  ");
-      Serial.print("(");
-      Serial.print(x);
-      Serial.print(",");
-      Serial.print(y);
-      Serial.print(",");
-      Serial.print(theta);
-      Serial.println("%)");
-      Serial.print("Distance from goal :");
-      Serial.println(dist);
-      Serial.println("############################################");
-    }//if
-  }//if
-}//CheckEncoders
-
-void updateChange() {
-  //traveled
-  travelDist = (tempSl + tempSr) / 2;
-
-  thetaChange = (tempSr - tempSl) / b;
-
-  xChange = travelDist * cos(theta + thetaChange / 2);
-  yChange = travelDist * sin(theta + thetaChange / 2);
-  //updates the current location
-  x += xChange;
-  y += yChange;
-  theta += thetaChange;
-  dist = eucDist(xGoal, yGoal, x, y);
-
-
-  if (changeDebugger) {
-    Serial.print("sChange :");
-    Serial.println(sChange);
-    Serial.print("thetaChange :");
-    Serial.println(thetaChange);
-    Serial.print("xChange :");
-    Serial.println(xChange);
-    Serial.print("yChange :");
-    Serial.println(yChange);
-  }//if
-
-}//updateChange
-
-double getError() {
-  float error = theta - atan2(yGoal - y, xGoal - x);
-  return error;
-}//getError
-
-double updateP() {
-  //positive err --> Left
-  //negative err --> Right
-  err = getError();
-
-  //----------PROPORTION------//
-  double proportional = kp * err;
-
-  if (PID_DEBUG) {
-    Serial.println("------PID-----");
-    Serial.print("currAngle:");
-    Serial.println(theta);
-    Serial.print("P: ");
-    Serial.println(proportional);
-  }//if
-
-  return proportional;
+    ledGreen(true);
+    delay(1000);
+    ledGreen(false);
+  }
 }
 
-//returns the controllerOutput
-double updateUSD(int currPos) {
+bool goalAccepted(double position, double goal, double errorThreshold)
+{
+  return (goal - errorThreshold <= position && goal + errorThreshold >= position);
+}
 
-  double updateValue = 0.0;
+/**
+ * Read encoder data to calculate the distance traveled
+ * Also, calculate the change in position to calculate position
+ * @returns void sets sL and sR delta for position calculation
+ */
+void readEncoders()
+{
+  encodersT1 = millis();
 
-  //detectionLevel = position magnitude * position multiplier
-  detectionLevel = (MAX_DISTANCE - DISTANCES[currPos]) * POSITION_MULTIPLIERS[currPos];
+  if (encodersT1 > encodersT2 + ENCODER_PERIOD)
+  {
 
-  //Decides which direction the front will apply towards
-  if (currPos == 2) {
-    closeObj = detectionLevel;
+    // read current encoder count
+    countsLeftT1 += encoders.getCountsAndResetLeft();
+    countsRightT1 += encoders.getCountsAndResetRight();
 
+    // update the distance traveled by each wheel
+    sLeftT1 += (countsLeftT1 - countsLeftT2) * DIST_PER_TICK;
+    sRightT1 += (countsRightT1 - countsRightT2) * DIST_PER_TICK;
 
-    //Determines which side has the most obsticles
-    //Negative --> Go Right
-    if (usdetection < 0)
-      detectionLevels[currPos] = detectionLevel * -1;
-    //Postive --> Go Left
-    else {
-      detectionLevels[currPos] = detectionLevel;
-    }//else
+    // get change of current and previous distance traveled
+    sLeftDelta = sLeftT1 - sLeftT2;
+    sRightDelta = sRightT1 - sRightT2;
 
-  }//if
-  //Usual Case --> calcualtes the rest of the postions
-  else {
-    detectionLevels[currPos] = detectionLevel;
-  }//else
+    // write previous encoder count
+    countsLeftT2 = countsLeftT1;
+    countsRightT2 = countsRightT1;
 
-  //resets the usdetection
-  usdetection = 0;
-  //Calculates the new USD
-  for (int i = 0; i < sizeof(detectionLevels) / sizeof(double); i++) {
-    usdetection += detectionLevels[i];
-  }//for
+    // write previous distance traveled
+    sLeftT2 = sLeftT1;
+    sRightT2 = sRightT1;
 
+    // reset timer
+    encodersT2 = encodersT1;
 
-  if (USD_DEBUG) {
-    Serial.print("Pos ");
-    Serial.print(currPos);
-    Serial.print(": ");
-    Serial.println(detectionLevel);
-    Serial.print("US detection:");
-    Serial.println(usdetection);
-    Serial.print("Object very close (when less than 50)");
-    Serial.println(closeObj);
-  }//if
+    if (ENCODER_DEBUG)
+      debugEncoders();
 
-  return usdetection * kusd;
-}//Update PID
+    // send encoder data to calculate x,y,theta position
+    localize();
+  }
+}
 
-//Identifies when the robot reaches the goal
-bool isFinished() {
-  bool fin = false;
-  bool complete = false;
-  if ((xGoal - leeWay <= x && xGoal + leeWay >= x) && (yGoal - leeWay <= y && yGoal + leeWay >= y))
-    fin = true;
+/**
+ * Update the robots current position using wheel encoder data
+ * @param none reads change from sL and sR
+ * @returns void updates x,y, theta and currentGoalDistance
+ */
+void localize()
+{
+  // update position using the deltas of each
+  sDelta = (sLeftDelta + sRightDelta) / 2.0f;
+  posDelta[THETA] = (sRightDelta - sLeftDelta) / B;
 
-  if (fin) {
-    count++;
-    xGoal = xGoals[count];
-    yGoal = yGoals[count];
+  // get polar coordinates of x and y
+  posDelta[X] = sDelta * cos(pos[THETA] + posDelta[THETA] / 2.0f);
+  posDelta[Y] = sDelta * sin(pos[THETA] + posDelta[THETA] / 2.0f);
 
-    //Sets a new Max distance from the new way point
-    G_FROM_O = eucDist(xGoal, yGoal, x, y);
+  // update coordinates
+  pos[X] += posDelta[X];
+  pos[Y] += posDelta[Y];
+  pos[THETA] += posDelta[THETA];
 
-    if (count < NUMBER_OF_GOALS)
-      buzzer.play("c32");
+  // update position after getting encoder data
+  currentGoalDistance = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
 
-    if (count == NUMBER_OF_GOALS - 1)
-      isEndGame = true;
+  // send position data to PID controller to get a correction
+  getPIDCorrection();
+}
 
-    else if (count == NUMBER_OF_GOALS) {
-      buzzer.play("c32");
-      buzzer.play("abc");
+/**
+ * get a proportionate correction based on current theta vs goal
+ * a positive currentError will suggest a left turn
+ * a negative currentError will suggest a right turn
+ * @param none. Reads position data and goal to set theta error
+ * @returns void set PIDcorrection to a proportional angle correction
+ */
+void getPIDCorrection()
+{
+  arctanToGoal = atan2(goal[Y] - pos[Y], goal[X] - pos[X]);
+
+  currentError = pos[THETA] - arctanToGoal;
+
+  PIDCorrection = KP * currentError;
+
+  checkGoalStatus();
+}
+
+/**
+ * check status of goals
+ * triggered when goalCompleted is set
+ * @returns void. selects next goal and resets startGoalDistance
+ */
+void checkGoalStatus()
+{
+  bool goalCompleted = false;
+  bool xAccepted = goalAccepted(pos[X], goal[X], GOAL_PRECISION);
+  bool yAccepted = goalAccepted(pos[Y], goal[Y], GOAL_PRECISION);
+
+  // check completed goal and set status
+  if (xAccepted && yAccepted)
+    goalCompleted = true;
+
+  // advance to next goal
+  if (goalCompleted)
+  {
+    // uncomment if you want to be annoyed
+    // buzzer.play("c32");
+
+    // cycle next goal
+    currentGoal++;
+    goal[X] = xGoals[currentGoal];
+    goal[Y] = yGoals[currentGoal];
+
+    // update start goal distance
+    startGoalDistance = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
+
+    // sleep after returning home
+    if (currentGoal == NUM_GOALS)
+    {
       motors.setSpeeds(0, 0);
-      complete = true;
+      ledGreen(1);
+    }
+  }
+}
 
-    }//if
-  }//if
+/**
+ * set motor speeds with PID input
+ * @returns void. sets left and right global wheelspeeds.
+ */
+void setMotors()
+{
+  motorT1 = millis();
 
-  return complete;
-}//isFinished
-
-//Adjusts the motor speeds by taking the angle and x/y goals into consideration
-void setMotors(double controllerOutput) {
-  motorCurrMil = millis();
-
-  if (motorCurrMil > motorPrevMil + MOTOR_PERIOD)
+  if (motorT1 > motorT2 + MOTOR_PERIOD)
   {
 
-    //check to see if the most current distnace measurement is less then / equal to MAX_DISTANCE
-    //determine the magnitude of the distance by taking the difference (short distnace = high distance)
-    //divide by the DISTANCE_FACTOR to ensure uniform response as MAX_DISTNACE changes
-    //This maps the distnace(1 - MAX_RANGE) to 0-100 for the magnitude
-    magnitude = (float)(G_FROM_O - dist) / GO_DIST_FACTOR;
-    //ex: MAX_DISTANCE = 80, distnace = 40: 80 - 40 = 40/.8 = 50(midrange)
-    //ex: MAX_DISTNACE = 160, distance = 40: 160- 40 = 120/1.6 = 75 (top 1/4)
+    leftSpeed = MOTOR_BASE_SPEED + PIDCorrection;
+    rightSpeed = MOTOR_BASE_SPEED - PIDCorrection;
 
-
-    //too far left from target (go right)
-    if (controllerOutput < 0) {
-      //CO is negative
-      leftSpeed = getWheel(controllerOutput, 1);
-      rightSpeed = getWheel(controllerOutput, -1);
+    // reduce wheelspeed if within threshold
+    if (currentGoalDistance <= DAMPEN_RANGE)
+    {
+      leftSpeed *= (currentGoalDistance / DAMPEN_RANGE);
+      rightSpeed *= (currentGoalDistance / DAMPEN_RANGE);
     }
-    //too far right from target (go left)
-    else {
-      //CO is positive
-      rightSpeed = getWheel(controllerOutput, -1);
-      leftSpeed = getWheel(controllerOutput, 1);
-    }//else
 
-    //lower limit check
-    if (leftSpeed < MOTOR_MIN_SPEED) leftSpeed = MOTOR_MIN_SPEED;
-    if (rightSpeed < MOTOR_MIN_SPEED) rightSpeed = MOTOR_MIN_SPEED;
-    //max limit check
-    if (leftSpeed > MOTOR_MAX_SPEED) leftSpeed = MOTOR_MAX_SPEED;
-    if (rightSpeed > MOTOR_MAX_SPEED) rightSpeed = MOTOR_MAX_SPEED;
+    // check max and min speed limits
+    if (leftSpeed <= MOTOR_MIN_SPEED)
+      leftSpeed = MOTOR_MIN_SPEED;
+    else if (leftSpeed >= MOTOR_MAX_SPEED)
+      leftSpeed = MOTOR_MAX_SPEED;
+
+    if (rightSpeed <= MOTOR_MIN_SPEED)
+      rightSpeed = MOTOR_MIN_SPEED;
+    else if (rightSpeed >= MOTOR_MAX_SPEED)
+      rightSpeed = MOTOR_MAX_SPEED;
+
+    // round wheelspeeds
+    // leftSpeed = floor(leftSpeed);
+    // rightSpeed = floor(rightSpeed);
 
     motors.setSpeeds(leftSpeed, rightSpeed);
 
-    if (MOTOR_DEBUG) {
-      Serial.print("Left: ");
-      Serial.println(leftSpeed);
-      Serial.print("Right: ");
-      Serial.println(rightSpeed);
-    }//if
+    motorT2 = motorT1;
+  }
+}
 
-    motorPrevMil = motorCurrMil;
-  }//if
-}//setMotors
+// export encoder data
+void debugEncoders()
+{
+  Serial.print("ENC ");
+  Serial.print("countsT1: ");
+  Serial.print(countsLeftT1);
+  Serial.print(", ");
+  Serial.print(countsRightT1);
+  Serial.print(" countsT2: ");
+  Serial.print(countsLeftT2);
+  Serial.print(", ");
+  Serial.print(countsRightT2);
+  Serial.print(" sT1: ");
+  Serial.print(sLeftT1);
+  Serial.print(", ");
+  Serial.print(sRightT1);
+  Serial.print(" sT2: ");
+  Serial.print(sLeftT2);
+  Serial.print(", ");
+  Serial.print(sRightT2);
+  Serial.print(" sDeltas: ");
+  Serial.print(sLeftDelta);
+  Serial.print(", ");
+  Serial.print(sRightDelta);
+  Serial.print(" posDelta: ");
+  Serial.println(sDelta);
+}
 
-//calculates the wheelspeed
-double getWheel(double co, int sign) {
-  //Multiple the magnitude by the MOTOR_FACTOR to map the magnitude range(0 - 100) at the motors
-  //(0 - MOTOR_BASED_SPEED)
-  //Added Min Speed as a constant to increase the speed
-  double wheelSpeed = (MOTOR_BASE_SPEED - (magnitude * MOTOR_FACTOR)) + (co * sign) + (MOTOR_MIN_SPEED);
+// headings for csv export
+void printCSVHeadings()
+{
+  Serial.println(); // nextline
+  Serial.println(__TIMESTAMP__);
 
+  Serial.print("time,");
+  Serial.print("X,");
+  Serial.print("Y,");
+  Serial.print("Theta,");
+  Serial.print("xGoal,");
+  Serial.print("yGoal,");
+  Serial.print("goalDist,");
+  Serial.print("atan,");
+  Serial.print("error,");
+  Serial.print("PID,");
+  Serial.print("leftSpeed,");
+  Serial.println("rightSpeed");
+}
 
-  //Slows down when objects are in front of it
-  if (DISTANCES[currHeadPos] < slowDist)
-    wheelSpeed = wheelSpeed * (dist / slowDist);
+// export csv data for plotting and tuning
+void logCSV()
+{
 
-  //slows the robot down when it is approaching the end goal
-  //Wheel gradually slows down when the slow dist is reached
-  if (dist < slowDist)
-    wheelSpeed = wheelSpeed * (dist / slowDist);
+  csvT1 = millis();
 
+  if (csvT1 > csvT2 + csvPERIOD)
+  {
+    Serial.print(millis());
+    Serial.print(",");
+    Serial.print(pos[X]);
+    Serial.print(",");
+    Serial.print(pos[Y]);
+    Serial.print(",");
+    Serial.print(pos[THETA]);
+    Serial.print(",");
+    Serial.print(goal[X]);
+    Serial.print(",");
+    Serial.print(goal[Y]);
+    Serial.print(",");
+    Serial.print(currentGoalDistance);
+    Serial.print(",");
+    Serial.print(arctanToGoal);
+    Serial.print(",");
+    Serial.print(currentError);
+    Serial.print(",");
+    Serial.print(PIDCorrection);
+    Serial.print(",");
+    Serial.print(leftSpeed);
+    Serial.print(",");
+    Serial.println(rightSpeed);
 
-
-  if (MOTOR_DEBUG) {
-    Serial.println("Base, Mag, and factor");
-    Serial.println((MOTOR_BASE_SPEED - (magnitude * MOTOR_FACTOR)));
-    Serial.println("pid output:");
-    Serial.println(co * sign);
-    Serial.println("True Wheel Speed:  ");
-    Serial.println(wheelSpeed);
-  }//if
-  return wheelSpeed;
-}//getWheel
+    csvT2 = csvT1;
+  }
+}
