@@ -9,7 +9,6 @@ Motors motors;
 Servo headServo; //Servo object
 ButtonA buttonA;
 
-//-----------------------DISTANCE CALCULATIONS-----------------------//
 unsigned long currentMilllis;
 unsigned long prevMillis;
 const unsigned long PERIOD = 20;
@@ -17,22 +16,16 @@ long countsLeft = 0;
 long countsRight = 0;
 long prevLeft = 0;
 long prevRight = 0;
-//All calculations are done in cm
 
-//CLICKS_PER_ROTATION * GEAR_RATIO =  Total # of clicks that happen in the encoder per wheel rotaiton
 const float CLICKS_PER_ROTATION = 12;
 const float GEAR_RATIO = 75.81F;
-//3.2 cm
 const float WHEEL_DIAMETER = 3.2;
 const float WHEEL_CIRCUMFRENCE = 10.0531;
 
-//-----------------LOCATION INITS---------------------//
 
-//location debugger
 bool locDebug = false;
 bool changeDebugger = false;
 
-//right and left wheel constants
 float b = 8.5;
 float prevSl = 0.0F;
 float prevSr = 0.0F;
@@ -45,7 +38,6 @@ float y = 0.0;
 float theta = 0;
 float pos[3] = { x, y, theta };
 
-//change constants
 float travelDist = 0;
 float sChange = 0;
 float thetaChange = 0;
@@ -57,8 +49,6 @@ double eucDist(double x2, double y2, double x1, double y1)
   return sqrt(sq(x2 - x1) + sq(y2 - y1));
 }
 
-//500 100
-// goals
 const int NUMBER_OF_GOALS = 1;
 float xGoals[NUMBER_OF_GOALS] = { 400 };
 float yGoals[NUMBER_OF_GOALS] = { -60 };
@@ -68,16 +58,13 @@ float yGoal = yGoals[count];
 float endDist;
 bool isEndGame = false;
 
-//Size of Way Points in cm
 int leeWay = 3;
 
-//distance from origin
 double G_FROM_O = eucDist(xGoal, yGoal, x, y);
 float dist = G_FROM_O;
 float slowDist = 40;
 const double GO_DIST_FACTOR = G_FROM_O / 2;
-//----------------------Ultra Sound------------------------------//
-//Initialize UltraSound
+
 const int ECHO_PIN = 4;
 const int TRIG_PIN = 5;
 
@@ -107,9 +94,7 @@ const int HEAD_SERVO_PIN = 22;
 const int NUM_HEAD_POSITIONS = 5;
 
 //adjusted the angles so US was facing straight foward.at the middle element
-//155 > x Looking Right (negative)
-//155 < x Looking Left  (positive)
-const int HEAD_POSITITIONS[NUM_HEAD_POSITIONS] = { 40, 70, 90, 110, 130 };
+const int HEAD_POSITITIONS[NUM_HEAD_POSITIONS] = { 50, 70, 90, 110, 130 };
 int POSITION_MULTIPLIERS[NUM_HEAD_POSITIONS] = { .25, 1, 4, -1, -.25 };
 
 //distances at the head positions
@@ -152,13 +137,13 @@ bool PID_DEBUG = false;
 bool USD_DEBUG = false;
 
 //USD constant
-double kusd = 13;
+double kusd = 5;
 
 //determines when an object is WAY too close
 double closeObj = 1000;
 
 //PID constants
-double kp = 100;
+double kp = 250;
 
 //PID calulated values
 double pro = 1;
@@ -201,6 +186,33 @@ void setup() {
   delay(1000);
   buzzer.play("c32");
 }
+
+void loop() {
+
+  if (!isFinished()) {
+    moveHead(newDist);
+    checkEncoders();
+    setMotors(pro + usd);
+    newDist = usReadCm();
+  }//if
+
+  else {
+    motors.setSpeeds(0, 0);
+
+    buzzer.play("c34");
+    delay(100000);
+  }//else
+
+  //Allows me to reset the location for debugging purposes
+  if (buttonA.isPressed()) {
+    usdetection = 0;
+    Sl = 0;
+    Sr = 0;
+    x = 0;
+    y = 0;
+    theta = 0;
+  }//if
+}//loop
 
 //Interprets the reading on the Ultra Sonic as a distance
 double usReadCm() {
@@ -578,30 +590,3 @@ double getWheel(double co, int sign) {
   }//if
   return wheelSpeed;
 }//getWheel
-
-void loop() {
-
-  if (!isFinished()) {
-    moveHead(newDist);
-    checkEncoders();
-    setMotors(pro + usd);
-    newDist = usReadCm();
-  }//if
-
-  else {
-    motors.setSpeeds(0, 0);
-
-    buzzer.play("c34");
-    delay(100000);
-  }//else
-
-  //Allows me to reset the location for debugging purposes
-  if (buttonA.isPressed()) {
-    usdetection = 0;
-    Sl = 0;
-    Sr = 0;
-    x = 0;
-    y = 0;
-    theta = 0;
-  }//if
-}//loop
