@@ -47,20 +47,21 @@ const bool US_DEBUG = false;
 const bool LOG_CSV = true;
 
 // scheduler intervals
-const unsigned long MOTOR_PERIOD = 20ul;       // motor speed
-const unsigned long ENCODER_PERIOD = 20ul;     // count encoders
-const unsigned long US_PERIOD = 15ul;          // ultrasonic ping
-const unsigned long HEAD_SERVO_PERIOD = 200ul; // sweep head
-const unsigned long CSV_PERIOD = 50uL;          // print csv row
+const unsigned long MOTOR_PERIOD = 20ul;            // motor speed
+const unsigned long ENCODER_PERIOD = 20ul;          // count encoders
+const unsigned long US_PERIOD = 15ul;               // ultrasonic ping
+const unsigned long HEAD_SERVO_MOVE_PERIOD = 200ul; // call sweep head
+const unsigned long HEAD_SERVO_WAIT_PERIOD = 50ul;  // make US wait for move to finish
+const unsigned long CSV_PERIOD = 50uL;              // print csv row
 
 // scheduler timers
 unsigned long encodersT1 = 0ul, encodersT2 = 0ul;
 unsigned long csvT1 = 0ul, csvT2 = 0ul;
 unsigned long motorT1 = 0ul, motorT2 = 0ul;
-unsigned long servoTimer1 = 0ul, servoTimer2 = 0ul;
+unsigned long servoT1 = 0ul, servoT2 = 0ul;
+unsigned long usT1 = 0ul, usT2 = 0ul;
 
 // misc constants
-// TODO data type
 const double SPEED_OF_SOUND = 0.034;
 
 // index for parsing pos, delta, goal arrays
@@ -69,10 +70,10 @@ constexpr int X = 0, Y = 1, THETA = 2;
 /* encoder data */
 
 // encoder counts
-long countsLeftT1 = 0, countsRightT1 = 0;
+long countsLeftT1 = 0l, countsRightT1 = 0l;
 
 // container to store the previous counts
-long countsLeftT2 = 0, countsRightT2 = 0;
+long countsLeftT2 = 0l, countsRightT2 = 0l;
 
 // distance traveled by wheel in cm
 double sLeftT1 = 0.0, sRightT1 = 0.0;
@@ -115,15 +116,11 @@ int currentGoal = 0;
 // len of GOALS array, how many goals we want to navigate to
 const int NUM_GOALS = 1;
 
-// goal containers
-double xGoals[NUM_GOALS] = { 100.0 };
-double yGoals[NUM_GOALS] = { 80.0 };
-
 // coordinates of goal
-double goal[2] = { xGoals[currentGoal], yGoals[currentGoal] };
+double goal[2] = { 50.0, 50.0 };
 
 // allow a slight error within this range
-const double GOAL_PRECISION = 1;
+const double GOAL_PRECISION = 1.0;
 
 // starting linear distance from goal. Updated on goal change
 double startGoalDistance = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
@@ -149,7 +146,7 @@ double leftSpeed = MOTOR_MIN_SPEED, rightSpeed = MOTOR_MIN_SPEED;
 const double KP = 20.0;
 
 // suggested PID correction
-double PIDCorrection = 0.0;
+double gain = 0.0;
 
 // current theta vs theta of goal. Derived from arctan
 double currentError = 0.0;
@@ -159,11 +156,16 @@ double arctanToGoal = 0.0;
 
 /* head servo data */
 
+// number of angles in HEAD_POSITIONS array
+constexpr int POS_LEN = 5;
+constexpr int POS_BEGIN = 0;
+constexpr int POS_END = POS_LEN - 1;
+
 // angle servo is currently facing
 int servoAngle = 90;
 
-// index of HEAD_POSITIONS array 
-int servoPosition = 3;
+// index of HEAD_POSITIONS array
+int servoPosition = 2;
 
 // logic for servo sweeping right or left
 bool sweepingClockwise = true;
@@ -172,10 +174,23 @@ bool sweepingClockwise = true;
 bool servoMoving = false;
 
 // legal head positions (angles) servo can point
-const int HEAD_POSITIONS[7] = { 135, 120, 105, 90, 75, 60, 45 };
+const int HEAD_POSITIONS[POS_LEN] = { 130, 110, 90, 70, 50 };
+
+/* us data */
+
+const double US_MAX_DISTANCE = 80.0;
+
+double pingTimeDuration = 0.0f;
+
+double pingDistance = 0.0f;
+
+double tempPingDistance = 0.0f;
+
+// microsecond timeout
+const unsigned long ECHO_TIMEOUT = 38000ul;
 
 // position readings from each angle
-int distances[7] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+double distances[POS_LEN] = { US_MAX_DISTANCE, US_MAX_DISTANCE, US_MAX_DISTANCE, US_MAX_DISTANCE, US_MAX_DISTANCE };
 
 void setup()
 {
@@ -188,8 +203,10 @@ void loop()
 {
   if (currentGoal < NUM_GOALS)
   {
+    setServo();
+    readUltrasonic(servoPosition);
     readEncoders();
-    setMotors();
+    setMotors(gain, 0.0);
 
     if (LOG_CSV)
       logCSV();
@@ -206,48 +223,104 @@ void loop()
 
 void setServo()
 {
-  servoTimer1 = millis();
+  servoT1 = millis();
 
   // poll servo
-  if (servoTimer1 > servoTimer2 + HEAD_SERVO_PERIOD && !servoMoving)
+  if (servoT1 > servoT2 + HEAD_SERVO_MOVE_PERIOD && !servoMoving)
   {
     servoMoving = true;
 
     // get next position
     servoPosition = cyclePosition(servoPosition);
     servoAngle = HEAD_POSITIONS[servoPosition];
-    
+
     headServo.write(servoAngle);
 
     // reset timer
-    servoTimer2 = servoTimer1;
+    servoT2 = servoT1;
   }
 
   // allow servo to finish sweep
-  else if (servoTimer1 > servoTimer2 + HEAD_SERVO_PERIOD && servoMoving)
+  else if (servoT1 > servoT2 + HEAD_SERVO_WAIT_PERIOD && servoMoving)
   {
     servoMoving = false;
-    servoTimer2 = servoTimer1;
-
-    //if (bDebugHeadServo) headServoDebug("Head Servo");
+    servoT2 = servoT1;
   }
 }
 
-int cyclePosition(int index)
+// cycle through HEAD_POSITIONS array
+int cyclePosition(int posItr)
 {
   // check bounds, toggle sweep
-  if (index == 0 || index == 6) sweepingClockwise = !sweepingClockwise;
+  if (posItr == POS_BEGIN || posItr == POS_END)
+    sweepingClockwise = !sweepingClockwise;
 
   // CW: start at 0 then ascend
-  if (sweepingClockwise) return (7 + index + 1) % 7;
-  
+  if (sweepingClockwise)
+    return (POS_LEN + posItr + 1) % POS_LEN;
+
   // CCW: start at 6 then decend
-  else return (7 + index - 1) % 7;
+  else
+    return (POS_LEN + posItr - 1) % POS_LEN;
 }
 
-bool goalAccepted(double position, double goal, double errorThreshold)
+/**
+ * @brief call US methods to calculate distance
+ * @param posItr current index of head positions array
+ */
+void readUltrasonic(int posItr)
 {
-  return (goal - errorThreshold <= position && goal + errorThreshold >= position);
+  usT1 = millis();
+
+  // send one ping, write to correct index
+  if (usT1 > usT2 + US_PERIOD && !servoMoving)
+  {
+    pingDistance = sendPing();
+
+    // handle timeout
+    if (pingDistance == 0)
+      pingDistance = US_MAX_DISTANCE;
+
+    // handle too far to care
+    else if (pingDistance >= US_MAX_DISTANCE)
+      pingDistance = US_MAX_DISTANCE;
+
+    // ssave data
+    distances[posItr] = pingDistance;
+
+    usT2 = usT1;
+  }
+}
+
+/**
+ * send US ping to determine distance
+ * @returns pingDistance total TOF
+ */
+float sendPing()
+{
+  // set trigger pin to low voltage
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  // activate trigger pin for 10 microseconds
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+
+  // clear trigger pin
+  digitalWrite(TRIG_PIN, LOW);
+
+  // read echo pin and read second wave travel time
+  pingTimeDuration = pulseIn(ECHO_PIN, HIGH, ECHO_TIMEOUT);
+
+  // handle timeout, skip computation
+  if (pingTimeDuration == 0)
+    tempPingDistance = 0.0f;
+
+  // calculate round trip time of flight
+  else
+    tempPingDistance = pingTimeDuration * SPEED_OF_SOUND / 2.0;
+
+  return tempPingDistance;
 }
 
 /**
@@ -285,9 +358,6 @@ void readEncoders()
     // reset timer
     encodersT2 = encodersT1;
 
-    if (ENCODER_DEBUG)
-      debugEncoders();
-
     // send encoder data to calculate x,y,theta position
     localize();
   }
@@ -317,25 +387,30 @@ void localize()
   currentGoalDistance = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
 
   // send position data to PID controller to get a correction
-  getPIDCorrection();
+  gain = getPID(pos[THETA]);
+
+  checkGoalStatus();
 }
 
 /**
  * get a proportionate correction based on current theta vs goal
  * a positive currentError will suggest a left turn
  * a negative currentError will suggest a right turn
- * @param none. Reads position data and goal to set theta error
  * @returns void set PIDcorrection to a proportional angle correction
  */
-void getPIDCorrection()
+double getPID(double currentTheta)
 {
   arctanToGoal = atan2(goal[Y] - pos[Y], goal[X] - pos[X]);
 
-  currentError = pos[THETA] - arctanToGoal;
+  currentError = currentTheta - arctanToGoal;
 
-  PIDCorrection = KP * currentError;
+  return KP * currentError;
+}
 
-  checkGoalStatus();
+// see if robot is within accepted goal distance
+bool goalAccepted(double position, double goal, double errorThreshold)
+{
+  return (goal - errorThreshold <= position && goal + errorThreshold >= position);
 }
 
 /**
@@ -361,8 +436,6 @@ void checkGoalStatus()
 
     // cycle next goal
     currentGoal++;
-    goal[X] = xGoals[currentGoal];
-    goal[Y] = yGoals[currentGoal];
 
     // update start goal distance
     startGoalDistance = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
@@ -376,30 +449,19 @@ void checkGoalStatus()
   }
 }
 
-/*
- * set the LEDS to on or off.
- * @param (color) false (off) or true (on)
- * @returns void. Sets the pololu LED pins
- */
-void setLEDs(bool Y, bool G, bool R) {
-  ledYellow(Y);
-  ledGreen(G);
-  ledRed(R);
-}
-
 /**
  * set motor speeds with PID input
  * @returns void. sets left and right global wheelspeeds.
  */
-void setMotors()
+void setMotors(double attractiveForce, double repulsiveForce)
 {
   motorT1 = millis();
 
   if (motorT1 > motorT2 + MOTOR_PERIOD)
   {
 
-    leftSpeed = MOTOR_BASE_SPEED + PIDCorrection;
-    rightSpeed = MOTOR_BASE_SPEED - PIDCorrection;
+    leftSpeed = MOTOR_BASE_SPEED + gain;
+    rightSpeed = MOTOR_BASE_SPEED - gain;
 
     // reduce wheelspeed if within threshold
     if (currentGoalDistance <= DAMPEN_RANGE)
@@ -429,47 +491,16 @@ void setMotors()
   }
 }
 
-// output data to serial monitor
-void debugHeadServo(char label[])
+/*
+ * set the LEDS to on or off.
+ * @param (color) false (off) or true (on)
+ * @returns void. Sets the pololu LED pins
+ */
+void setLEDs(bool Y, bool G, bool R)
 {
-  Serial.print(label);
-  Serial.print(",");
-  Serial.print(sweepingClockwise);
-  Serial.print(",");
-  Serial.print(servoAngle);
-  Serial.print(",");
-  Serial.print(servoPosition);
-  Serial.print(servoTimer1);
-  Serial.print(",");
-  Serial.println(servoTimer2);
-}
-
-// export encoder data
-void debugEncoders()
-{
-  Serial.print("ENC ");
-  Serial.print("countsT1: ");
-  Serial.print(countsLeftT1);
-  Serial.print(", ");
-  Serial.print(countsRightT1);
-  Serial.print(" countsT2: ");
-  Serial.print(countsLeftT2);
-  Serial.print(", ");
-  Serial.print(countsRightT2);
-  Serial.print(" sT1: ");
-  Serial.print(sLeftT1);
-  Serial.print(", ");
-  Serial.print(sRightT1);
-  Serial.print(" sT2: ");
-  Serial.print(sLeftT2);
-  Serial.print(", ");
-  Serial.print(sRightT2);
-  Serial.print(" sDeltas: ");
-  Serial.print(sLeftDelta);
-  Serial.print(", ");
-  Serial.print(sRightDelta);
-  Serial.print(" posDelta: ");
-  Serial.println(sDelta);
+  ledYellow(Y);
+  ledGreen(G);
+  ledRed(R);
 }
 
 // headings for csv export
@@ -478,6 +509,7 @@ void printCSVHeadings()
   Serial.println(); // nextline
   Serial.println(__TIMESTAMP__);
 
+  // position
   Serial.print("time,");
   Serial.print("X,");
   Serial.print("Y,");
@@ -488,8 +520,45 @@ void printCSVHeadings()
   Serial.print("atan,");
   Serial.print("error,");
   Serial.print("PID,");
+
+  // wheel speeds
   Serial.print("leftSpeed,");
-  Serial.println("rightSpeed");
+  Serial.print("rightSpeed");
+
+  // encoders
+  if (ENCODER_DEBUG)
+  {
+    Serial.print("countsT1,");
+    Serial.print("countsT2,");
+    Serial.print("sLeftT1,");
+    Serial.print("sRightT1,");
+    Serial.print("sLeftT2,");
+    Serial.print("sRightT2,");
+    Serial.print("sLeftDelta,");
+    Serial.print("sRightDelta,");
+    Serial.print("sDelta,");
+  }
+
+  // head servo
+  if (HEAD_SERVO_DEBUG)
+  {
+    Serial.print("sweepingClockwise,");
+    Serial.print("servoAngle,");
+    Serial.print("servoPosition,");
+    Serial.print("servoT1,");
+    Serial.print("servoT2,");
+  }
+
+  // ultrasonic
+  if (US_DEBUG)
+  {
+    Serial.print("pingTimeDuration,");
+    Serial.print("pingDistance,");
+    Serial.print("usT1,");
+    Serial.print("usT2,");
+  }
+
+  Serial.println("");
 }
 
 // export csv data for plotting and tuning
@@ -518,11 +587,69 @@ void logCSV()
     Serial.print(",");
     Serial.print(currentError);
     Serial.print(",");
-    Serial.print(PIDCorrection);
+    Serial.print(gain);
     Serial.print(",");
+
+    // wheel speeds
     Serial.print(leftSpeed);
     Serial.print(",");
-    Serial.println(rightSpeed);
+    Serial.print(rightSpeed);
+
+    // encoders
+    if (ENCODER_DEBUG)
+    {
+      Serial.print(",");
+      Serial.print(countsLeftT1);
+      Serial.print(",");
+      Serial.print(countsRightT1);
+      Serial.print(",");
+      Serial.print(countsLeftT2);
+      Serial.print(",");
+      Serial.print(countsRightT2);
+      Serial.print(",");
+      Serial.print(sLeftT1);
+      Serial.print(",");
+      Serial.print(sRightT1);
+      Serial.print(",");
+      Serial.print(sLeftT2);
+      Serial.print(",");
+      Serial.print(sRightT2);
+      Serial.print(",");
+      Serial.print(sLeftDelta);
+      Serial.print(",");
+      Serial.print(sRightDelta);
+      Serial.print(",");
+      Serial.print(sDelta);
+      Serial.print(",");
+    }
+
+    // head servo
+    if (HEAD_SERVO_DEBUG)
+    {
+      Serial.print(sweepingClockwise);
+      Serial.print(",");
+      Serial.print(servoAngle);
+      Serial.print(",");
+      Serial.print(servoPosition);
+      Serial.print(",");
+      Serial.print(servoT1);
+      Serial.print(",");
+      Serial.print(servoT2);
+      Serial.print(",");
+    }
+
+    // ultrasonic
+    if (US_DEBUG)
+    {
+      Serial.print(pingTimeDuration);
+      Serial.print(",");
+      Serial.print(pingDistance);
+      Serial.print(usT1);
+      Serial.print(",");
+      Serial.print(usT2);
+    }
+
+    Serial.println("");
 
     csvT2 = csvT1;
   }
