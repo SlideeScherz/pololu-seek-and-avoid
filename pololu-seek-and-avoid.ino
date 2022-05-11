@@ -1,7 +1,7 @@
 /**
  * Name: pololu_seek_and_avoid.ino
  * Created: 5/9/2022 12:36:13 AM
- * Author: Team Five
+ * Authors: Team Five
  *
  * All distance calculations done in CM.
  * All timer data will be in milliseconds
