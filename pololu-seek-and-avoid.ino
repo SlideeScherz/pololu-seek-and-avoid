@@ -11,6 +11,7 @@
 
 #include <Pololu3piPlus32U4.h>
 #include <Servo.h>
+#include "Coordinate.h"
 
 using namespace Pololu3piPlus32U4;
 
@@ -38,9 +39,6 @@ const bool PID_DEBUG = true;        // pid and erros
 const bool REP_FORCES_DEBUG = true; // repulsive forces containers
 const bool HEAD_SERVO_DEBUG = true; // head servo pos, angle
 const bool US_DEBUG = true;         // ultrasonic
-
-// index for parsing pos, delta, goal arrays
-constexpr int X = 0, Y = 1, THETA = 2;
 
 /* scheduler data */
 
@@ -130,10 +128,10 @@ const double B = 8.5;
 /* position data */
 
 // positional polar coordinates
-double pos[3] = {};
+Coordinate pos;
 
 // change in position between last 2 intervals
-double deltaPos[3] = {};
+Coordinate deltaPos;
 
 /* goal data */
 
@@ -141,7 +139,7 @@ double deltaPos[3] = {};
 bool xAccepted = false, yAccepted = false, goalComplete = false;
 
 // x y coordinates of goal
-double goal[2] = {};
+Coordinate goal(50.0, 80.0);
 
 // allow a slight error within this range
 const double GOAL_PRECISION = 1.0;
@@ -196,13 +194,9 @@ void setup()
   if(servoAngle != 0)
     headServo.write(servoAngle);
 
-  // goal
-  goal[X] = 0.0;
-  goal[Y] = 50.0;
-
   // init errors
-  distanceError = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
-  angleError = getAngleError(pos[THETA]);
+  distanceError = eucDistance(pos, goal);
+  angleError = getAngleError(pos, goal);
 
   delay(1000ul); // dont you run away from me...
   buzzer.play("c32");
@@ -242,25 +236,24 @@ void loop()
 
 /**
  * @brief Calculate Euclidian distance
- * @param x2 goal x
- * @param y2 goal y
- * @param x1 current x
- * @param y1 current y
+ * @param p1 position
+ * @param p2 goal
  * @return double distance from target points
  */
-double eucDistance(double x2, double y2, double x1, double y1)
+double eucDistance(Coordinate p1, Coordinate p2)
 {
-  return sqrt(sq(x2 - x1) + sq(y2 - y1));
+  return sqrt(sq(p2.x - p1.x) + sq(p2.y - p1.y));
 }
 
 /**
  * @brief Get the Angle Error of robot vs target
- * @param currentTheta robots orientation
+ * @param p position
+ * @param g goal
  * @return double error of orientation
  */
-double getAngleError(double currentTheta)
+double getAngleError(Coordinate p, Coordinate g)
 {
-  return currentTheta - atan2(goal[Y] - pos[Y], goal[X] - pos[X]);
+  return p.theta - atan2(g.y - p.y, g.x - p.x);
 }
 
 /**
@@ -282,16 +275,16 @@ int handleLimit(int input, int min, int max)
 
 /**
  * @brief check status of goals.
- * @param posC pos array
- * @param goalC goal array
+ * @param p position
+ * @param g goal
  * @param errorThreshold value to adjust goal
  * @return true both accepted within acceptable goal
  * @return false not within acceptable goal
  */
-bool checkGoalStatus(double position[], double goalA[], double errorThreshold)
+bool checkGoalStatus(Coordinate p, Coordinate g, double errorThreshold)
 {
-  xAccepted = goalA[X] - errorThreshold <= position[X] && goal[X] + errorThreshold >= position[X];
-  yAccepted = goalA[Y] - errorThreshold <= position[Y] && goal[Y] + errorThreshold >= position[Y];
+  xAccepted = g.x - errorThreshold <= p.x && goal.x + errorThreshold >= p.x;
+  yAccepted = g.y - errorThreshold <= p.y && goal.y + errorThreshold >= p.y;
 
   // check completed goal and set status
   return (xAccepted && yAccepted);
@@ -456,19 +449,19 @@ void localize(int posItr)
   deltaDistTotal = (deltaDistL + deltaDistR) / 2.0;
 
   // change in orientation
-  deltaPos[THETA] = (deltaDistR - deltaDistL) / B;
+  deltaPos.theta = (deltaDistR - deltaDistL) / B;
 
   // get polar coordinates of x and y
-  deltaPos[X] = deltaDistTotal * cos(pos[THETA] + deltaPos[THETA] / 2);
-  deltaPos[Y] = deltaDistTotal * sin(pos[THETA] + deltaPos[THETA] / 2);
+  deltaPos.x = deltaDistTotal * cos(pos.theta + deltaPos.theta / 2);
+  deltaPos.y = deltaDistTotal * sin(pos.theta + deltaPos.theta / 2);
 
   // update coordinates
-  pos[X] += deltaPos[X];
-  pos[Y] += deltaPos[Y];
-  pos[THETA] += deltaPos[THETA];
+  pos.x += deltaPos.x;
+  pos.y += deltaPos.y;
+  pos.theta += deltaPos.theta;
 
   // send position data to PID controller to get a correction
-  gain = getPID(pos[THETA]);
+  gain = getPID(pos, goal);
 
   getRepulsiveForces(posItr);
 
@@ -477,15 +470,17 @@ void localize(int posItr)
 
 /**
  * @brief get a proportionate correction based on current theta vs goal
+ * @param p position
+ * @param g goal
  * @returns double proportional angle correction
  */
-double getPID(double currentTheta)
+double getPID(Coordinate p, Coordinate g)
 {
   // distance error magnitude
-  distanceError = eucDistance(goal[X], goal[Y], pos[X], pos[Y]);
+  distanceError = eucDistance(p, g);
 
   // error magnitude: current state - target state
-  angleError = getAngleError(currentTheta);
+  angleError = getAngleError(p, g);
 
   return KP * angleError;
 }
@@ -520,9 +515,6 @@ void setMotors()
 
   if (motorT1 > motorT2 + MOTOR_PERIOD)
   {
-    //HACK TESTING without US
-    rForceL = 0.0; rForceR = 0.0; rForceFwd = 0.0;
-
     speedL = MIN_SPEED + gain + rForceL;
     speedR = MIN_SPEED - gain + rForceR;
 
@@ -561,7 +553,6 @@ void printDebugHeadings()
   {
     Serial.print("dError,");
     Serial.print("aError,");
-    Serial.print("absAError,");
     Serial.print("gain, ");
   }
 
@@ -642,15 +633,15 @@ void printDebugData()
     // localization
     if (LOC_DEBUG)
     {
-      Serial.print(pos[X]);
+      Serial.print(pos.x);
       Serial.print(",");
-      Serial.print(pos[Y]);
+      Serial.print(pos.y);
       Serial.print(",");
-      Serial.print(pos[THETA]);
+      Serial.print(pos.theta);
       Serial.print(",");
-      Serial.print(goal[X]);
+      Serial.print(goal.x);
       Serial.print(",");
-      Serial.print(goal[Y]);
+      Serial.print(goal.y);
       Serial.print(",");
     }
 
@@ -660,8 +651,6 @@ void printDebugData()
       Serial.print(distanceError);
       Serial.print(",");
       Serial.print(angleError);
-      Serial.print(",");
-      Serial.print(abs(angleError));
       Serial.print(",");
       Serial.print(gain);
       Serial.print(",");
