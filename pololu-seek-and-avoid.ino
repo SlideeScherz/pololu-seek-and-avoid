@@ -12,6 +12,7 @@
 #include <Pololu3piPlus32U4.h>
 #include <Servo.h>
 #include "Coordinate.h"
+#include "Clock.h"
 
 using namespace Pololu3piPlus32U4;
 
@@ -32,28 +33,21 @@ const uint8_t HEAD_SERVO_PIN = 4;
  * If not using any, set CSV_PERIOD to 10,000 ms
  */
 
-const bool LOC_DEBUG = true;        // localization
+const bool LOC_DEBUG = false;        // localization
 const bool ENCODER_DEBUG = false;    // wheel encoders
-const bool MOTOR_DEBUG = true;      // wheel motors
-const bool PID_DEBUG = true;        // pid and erros
-const bool REP_FORCES_DEBUG = true; // repulsive forces containers
-const bool HEAD_SERVO_DEBUG = true; // head servo pos, angle
-const bool US_DEBUG = true;         // ultrasonic
+const bool MOTOR_DEBUG = false;      // wheel motors
+const bool PID_DEBUG = false;        // pid and erros
+const bool REP_FORCES_DEBUG = false; // repulsive forces containers
+const bool HEAD_SERVO_DEBUG = false; // head servo pos, angle
+const bool US_DEBUG = false;         // ultrasonic
 
 /* scheduler data */
 
-const unsigned long US_PERIOD = 15ul;               // ultrasonic ping
-const unsigned long MOTOR_PERIOD = 20ul;            // motor speed
-const unsigned long ENCODER_PERIOD = 20ul;          // count encoders
-const unsigned long HEAD_SERVO_WAIT_PERIOD = 50ul;  // make US wait for move to finish
-const unsigned long CSV_PERIOD = 50uL;              // print csv row
-const unsigned long HEAD_SERVO_CYCLE_PERIOD = 100ul; // call sweep head
-
-unsigned long encoderT1 = 0ul, encoderT2 = 0ul; // wheel encoders timer
-unsigned long csvT1 = 0ul, csvT2 = 0ul;         // csv timer
-unsigned long motorT1 = 0ul, motorT2 = 0ul;     // wheel motors timer
-unsigned long servoT1 = 0ul, servoT2 = 0ul;     // head servo timer
-unsigned long usT1 = 0ul, usT2 = 0ul;           // ultrasonic timer
+Clock usTimer(15ul);
+Clock motorTimer(20ul);
+Clock encoderTimer(20ul);
+Clock headServoTimer(50ul);
+Clock csvTimer(50ul);
 
 // misc constants
 const double SPEED_OF_SOUND = 0.034;
@@ -62,7 +56,6 @@ constexpr int POS_LEN = 5; // default array length
 /* head servo data */
 
 bool sweepingClockwise = true; // sweeping right or left
-bool servoMoving = false;      // disable pings if moving
 
 // angles head servo can point
 const int HEAD_POSITIONS[POS_LEN] = { 50, 70, 90, 110, 130 };
@@ -82,10 +75,11 @@ const double MIN_DISTANCE = 2.0, MAX_DISTANCE = 80.0;
 unsigned long pingTimeDuration = 0ul;
 
 // derived from duration
-double pingDistance = 0.0f;
+double pingDistance = 0.0;
 
 // microsecond timeout (too far)
-const unsigned long PING_TIMEOUT = 38000ul;
+//const unsigned long PING_TIMEOUT = 38000ul;
+const unsigned long PING_TIMEOUT = 5000ul;
 
 // distance readings from each position
 double distances[POS_LEN] = { MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE, MAX_DISTANCE };
@@ -115,8 +109,8 @@ double deltaDistTotal = 0.0;
 // wheel and encoder constants, turtle edition
 const double CLICKS_PER_ROTATION = 12.0;
 
-// const double GEAR_RATIO = 75.81; // turtle edition
-const double GEAR_RATIO = 29.86; // standard edition
+ const double GEAR_RATIO = 75.81; // turtle edition
+//const double GEAR_RATIO = 29.86; // standard edition
 const double WHEEL_DIAMETER = 3.2;
 
 // cm traveled each gear tick
@@ -154,13 +148,13 @@ double speedL = 0.0, speedR = 0.0;
 
 /* PID data */
 
-const double KP = 55.0;
+const double KP = 27.5;
 
 // suggested PID correction
 double gain = 0.0;
 
 // current theta vs theta of goal. Derived from arctan
-double angleError = 0.0; 
+double angleError = 0.0;
 
 // current linear distance from goal. Updated on motor period
 double distanceError = 0.0;
@@ -190,8 +184,17 @@ void setup()
   motors.flipRightMotor(true);
   encoders.flipEncoders(true);
 
+  headServoTimer._ready = true;
+  headServoTimer.taskPeriod = 50ul;
+
+  usTimer._ready = true;
+
+  motorTimer._ready = true;
+  encoderTimer._ready = true;
+  csvTimer._ready = true;
+
   // if 0 can damage breadboard
-  if(servoAngle != 0)
+  if (servoAngle != 0)
     headServo.write(servoAngle);
 
   // init errors
@@ -199,7 +202,7 @@ void setup()
   angleError = getAngleError(pos, goal);
 
   delay(1000ul); // dont you run away from me...
-  buzzer.play("c32");
+  //buzzer.play("c32");
 
   printDebugHeadings();
 }
@@ -221,7 +224,7 @@ void loop()
   // sleep when done
   else if (goalComplete)
   {
-    buzzer.play("c32");
+    //buzzer.play("c32");
     motors.setSpeeds(0, 0);
     while (true)
     {
@@ -314,11 +317,10 @@ double getDistanceFromTOF(unsigned long tof, double max)
  */
 void setServo()
 {
-  servoT1 = millis();
-
-  if (servoT1 > servoT2 + HEAD_SERVO_CYCLE_PERIOD && !servoMoving)
+  if (headServoTimer.ready() && !headServoTimer._running)
   {
-    servoMoving = true;
+    headServoTimer.start();
+    usTimer._blocked = true;
 
     // get next position
     servoPosition = cyclePosition(servoPosition);
@@ -328,10 +330,10 @@ void setServo()
   }
 
   // allow servo to finish sweep
-  else if (servoT1 > servoT2 + HEAD_SERVO_WAIT_PERIOD && servoMoving)
+  else if (headServoTimer.completed())
   {
-    servoMoving = false;
-    servoT2 = servoT1;
+    headServoTimer.reset();
+    usTimer._blocked = false;
   }
 }
 
@@ -357,11 +359,11 @@ int cyclePosition(int posItr)
  */
 void readUltrasonic(int posItr)
 {
-  usT1 = millis();
-
   // send one ping, write to correct index
-  if (usT1 > usT2 + US_PERIOD && !servoMoving)
+  if (usTimer.ready() && !usTimer._blocked)
   {
+    usTimer.start();
+
     pingDistance = sendPing();
 
     pingDistance = handleLimit(pingDistance, MIN_DISTANCE, MAX_DISTANCE);
@@ -369,7 +371,7 @@ void readUltrasonic(int posItr)
     // write data
     distances[posItr] = pingDistance;
 
-    usT2 = usT1;
+    usTimer.reset();
   }
 }
 
@@ -404,10 +406,9 @@ double sendPing()
  */
 void readEncoders()
 {
-  encoderT1 = millis();
-
-  if (encoderT1 > encoderT2 + ENCODER_PERIOD)
+  if (encoderTimer.ready())
   {
+    encoderTimer.start();
 
     // read current encoder count
     countsL += encoders.getCountsAndResetLeft();
@@ -432,8 +433,7 @@ void readEncoders()
     // send encoder data to calculate x,y,theta position
     localize(servoPosition);
 
-    // reset timer
-    encoderT2 = encoderT1;
+    encoderTimer.reset();
   }
 }
 
@@ -511,10 +511,10 @@ void getRepulsiveForces(int posItr)
  */
 void setMotors()
 {
-  motorT1 = millis();
-
-  if (motorT1 > motorT2 + MOTOR_PERIOD)
+  if (motorTimer.ready())
   {
+    motorTimer.start();
+
     speedL = MIN_SPEED + gain + rForceL;
     speedR = MIN_SPEED - gain + rForceR;
 
@@ -528,7 +528,7 @@ void setMotors()
     // do not adjust regardless of fwd or backwards use
     motors.setSpeeds(speedL, speedR);
 
-    motorT2 = motorT1;
+    motorTimer.reset();
   }
 }
 
@@ -544,8 +544,6 @@ void printDebugHeadings()
     Serial.print("X,");
     Serial.print("Y,");
     Serial.print("theta,");
-    Serial.print("xGoal,");
-    Serial.print("yGoal,");
   }
 
   // pid
@@ -561,6 +559,11 @@ void printDebugHeadings()
   {
     Serial.print("speedL,");
     Serial.print("speedR,");
+    Serial.print("t1,");
+    Serial.print("t2,");
+    Serial.print("ready,");
+    Serial.print("running,");
+    Serial.print("blocked,");
   }
 
   // encoders
@@ -577,6 +580,11 @@ void printDebugHeadings()
     Serial.print("deltaDistL,");
     Serial.print("deltaDistR,");
     Serial.print("deltaDist,");
+    Serial.print("t1,");
+    Serial.print("t2,");
+    Serial.print("ready,");
+    Serial.print("running,");
+    Serial.print("blocked,");
   }
 
   // head servo
@@ -585,8 +593,11 @@ void printDebugHeadings()
     Serial.print("sweepCW,");
     Serial.print("sAngle,");
     Serial.print("sPos,");
-    Serial.print("sT1,");
-    Serial.print("sT2,");
+    Serial.print("t1,");
+    Serial.print("t2,");
+    Serial.print("ready,");
+    Serial.print("running,");
+    Serial.print("blocked,");
   }
 
   // ultrasonic
@@ -599,8 +610,11 @@ void printDebugHeadings()
     Serial.print("[2],");
     Serial.print("[3],");
     Serial.print("[4],");
-    Serial.print("usT1,");
-    Serial.print("usT2,");
+    Serial.print("t1,");
+    Serial.print("t2,");
+    Serial.print("ready,");
+    Serial.print("running,");
+    Serial.print("blocked,");
   }
 
   // repulsive feilds
@@ -622,12 +636,12 @@ void printDebugHeadings()
 // export csv data for plotting and tuning
 void printDebugData()
 {
-  csvT1 = millis();
-
-  if (csvT1 > csvT2 + CSV_PERIOD)
+  if (csvTimer.ready())
   {
+    csvTimer.start();
+
     // current timestamp
-    Serial.print(csvT1);
+    Serial.print(csvTimer.t1);
     Serial.print(",");
 
     // localization
@@ -638,10 +652,6 @@ void printDebugData()
       Serial.print(pos.y);
       Serial.print(",");
       Serial.print(pos.theta);
-      Serial.print(",");
-      Serial.print(goal.x);
-      Serial.print(",");
-      Serial.print(goal.y);
       Serial.print(",");
     }
 
@@ -655,13 +665,23 @@ void printDebugData()
       Serial.print(gain);
       Serial.print(",");
     }
-    
+
     // motors
     if (MOTOR_DEBUG)
     {
       Serial.print(speedL);
       Serial.print(",");
       Serial.print(speedR);
+      Serial.print(",");
+      Serial.print(motorTimer.t1);
+      Serial.print(",");
+      Serial.print(motorTimer.t2);
+      Serial.print(",");
+      Serial.print(motorTimer._ready);
+      Serial.print(",");
+      Serial.print(motorTimer._running);
+      Serial.print(",");
+      Serial.print(motorTimer._blocked);
       Serial.print(",");
     }
 
@@ -690,6 +710,16 @@ void printDebugData()
       Serial.print(",");
       Serial.print(deltaDistTotal);
       Serial.print(",");
+      Serial.print(encoderTimer.t1);
+      Serial.print(",");
+      Serial.print(encoderTimer.t2);
+      Serial.print(",");
+      Serial.print(encoderTimer._ready);
+      Serial.print(",");
+      Serial.print(encoderTimer._running);
+      Serial.print(",");
+      Serial.print(encoderTimer._blocked);
+      Serial.print(",");
     }
 
     // head servo
@@ -701,9 +731,15 @@ void printDebugData()
       Serial.print(",");
       Serial.print(servoPosition);
       Serial.print(",");
-      Serial.print(servoT1);
+      Serial.print(headServoTimer.t1);
       Serial.print(",");
-      Serial.print(servoT2);
+      Serial.print(headServoTimer.t2);
+      Serial.print(",");
+      Serial.print(headServoTimer._ready);
+      Serial.print(",");
+      Serial.print(headServoTimer._running);
+      Serial.print(",");
+      Serial.print(headServoTimer._blocked);
       Serial.print(",");
     }
 
@@ -724,9 +760,15 @@ void printDebugData()
       Serial.print(",");
       Serial.print(distances[4]);
       Serial.print(",");
-      Serial.print(usT1);
+      Serial.print(usTimer.t1);
       Serial.print(",");
-      Serial.print(usT2);
+      Serial.print(usTimer.t2);
+      Serial.print(",");
+      Serial.print(usTimer._ready);
+      Serial.print(",");
+      Serial.print(usTimer._running);
+      Serial.print(",");
+      Serial.print(usTimer._blocked);
       Serial.print(",");
     }
 
@@ -753,6 +795,6 @@ void printDebugData()
 
     Serial.print("\n");
 
-    csvT2 = csvT1;
+    csvTimer.reset();
   }
 }
