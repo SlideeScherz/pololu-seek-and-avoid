@@ -12,7 +12,7 @@
 #include <Pololu3piPlus32U4.h>
 #include <Servo.h>
 #include "Coordinate.h"
-#include "Clock.h"
+#include "Timer.h"
 
 using namespace Pololu3piPlus32U4;
 
@@ -43,11 +43,13 @@ const bool US_DEBUG = false;         // ultrasonic
 
 /* scheduler data */
 
-Clock usTimer(15ul);
-Clock motorTimer(20ul);
-Clock encoderTimer(20ul);
-Clock headServoTimer(50ul);
-Clock csvTimer(50ul);
+Timer usTimer(15ul);
+Timer motorTimer(20ul);
+Timer encoderTimer(20ul);
+Timer headServoTimer(50ul);
+Timer csvTimer(50ul);
+
+bool servoMoving = false;
 
 // misc constants
 const double SPEED_OF_SOUND = 0.034;
@@ -184,15 +186,6 @@ void setup()
   motors.flipRightMotor(true);
   encoders.flipEncoders(true);
 
-  headServoTimer._ready = true;
-  headServoTimer.taskPeriod = 50ul;
-
-  usTimer._ready = true;
-
-  motorTimer._ready = true;
-  encoderTimer._ready = true;
-  csvTimer._ready = true;
-
   // if 0 can damage breadboard
   if (servoAngle != 0)
     headServo.write(servoAngle);
@@ -317,23 +310,25 @@ double getDistanceFromTOF(unsigned long tof, double max)
  */
 void setServo()
 {
-  if (headServoTimer.ready() && !headServoTimer._running)
+  if (headServoTimer.ready() && !servoMoving)
   {
-    headServoTimer.start();
-    usTimer._blocked = true;
+    // block ultrasonic
+    servoMoving = true;
 
     // get next position
     servoPosition = cyclePosition(servoPosition);
     servoAngle = HEAD_POSITIONS[servoPosition];
 
     headServo.write(servoAngle);
+
+    headServoTimer.reset();
   }
 
   // allow servo to finish sweep
-  else if (headServoTimer.completed())
+  else if (headServoTimer.ready() && servoMoving)
   {
+    servoMoving = false;
     headServoTimer.reset();
-    usTimer._blocked = false;
   }
 }
 
@@ -360,10 +355,8 @@ int cyclePosition(int posItr)
 void readUltrasonic(int posItr)
 {
   // send one ping, write to correct index
-  if (usTimer.ready() && !usTimer._blocked)
+  if (usTimer.ready() && !servoMoving)
   {
-    usTimer.start();
-
     pingDistance = sendPing();
 
     pingDistance = handleLimit(pingDistance, MIN_DISTANCE, MAX_DISTANCE);
@@ -408,8 +401,6 @@ void readEncoders()
 {
   if (encoderTimer.ready())
   {
-    encoderTimer.start();
-
     // read current encoder count
     countsL += encoders.getCountsAndResetLeft();
     countsR += encoders.getCountsAndResetRight();
@@ -513,8 +504,6 @@ void setMotors()
 {
   if (motorTimer.ready())
   {
-    motorTimer.start();
-
     speedL = MIN_SPEED + gain + rForceL;
     speedR = MIN_SPEED - gain + rForceR;
 
@@ -638,8 +627,6 @@ void printDebugData()
 {
   if (csvTimer.ready())
   {
-    csvTimer.start();
-
     // current timestamp
     Serial.print(csvTimer.t1);
     Serial.print(",");
@@ -677,12 +664,6 @@ void printDebugData()
       Serial.print(",");
       Serial.print(motorTimer.t2);
       Serial.print(",");
-      Serial.print(motorTimer._ready);
-      Serial.print(",");
-      Serial.print(motorTimer._running);
-      Serial.print(",");
-      Serial.print(motorTimer._blocked);
-      Serial.print(",");
     }
 
     // encoders
@@ -714,12 +695,6 @@ void printDebugData()
       Serial.print(",");
       Serial.print(encoderTimer.t2);
       Serial.print(",");
-      Serial.print(encoderTimer._ready);
-      Serial.print(",");
-      Serial.print(encoderTimer._running);
-      Serial.print(",");
-      Serial.print(encoderTimer._blocked);
-      Serial.print(",");
     }
 
     // head servo
@@ -734,12 +709,6 @@ void printDebugData()
       Serial.print(headServoTimer.t1);
       Serial.print(",");
       Serial.print(headServoTimer.t2);
-      Serial.print(",");
-      Serial.print(headServoTimer._ready);
-      Serial.print(",");
-      Serial.print(headServoTimer._running);
-      Serial.print(",");
-      Serial.print(headServoTimer._blocked);
       Serial.print(",");
     }
 
@@ -763,12 +732,6 @@ void printDebugData()
       Serial.print(usTimer.t1);
       Serial.print(",");
       Serial.print(usTimer.t2);
-      Serial.print(",");
-      Serial.print(usTimer._ready);
-      Serial.print(",");
-      Serial.print(usTimer._running);
-      Serial.print(",");
-      Serial.print(usTimer._blocked);
       Serial.print(",");
     }
 

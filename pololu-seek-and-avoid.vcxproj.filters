@@ -27,7 +27,7 @@
     <ClInclude Include="Coordinate.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Clock.h">
+    <ClInclude Include="Timer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -35,7 +35,7 @@
     <ClCompile Include="Coordinate.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Clock.cpp">
+    <ClCompile Include="Timer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
