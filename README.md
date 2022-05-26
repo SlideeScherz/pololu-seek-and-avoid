@@ -4,6 +4,14 @@ Potential fields algorithm for Pololu 3pi+ OLED Robot
 
 ---
 
+### Potential Fields 
+
+Read more at [medium.com/path-planning](https://medium.com/@rymshasiddiqui/path-planning-using-potential-field-algorithm-a30ad12bdb08)
+
+Potential fields visualized
+
+![pot-fields](https://miro.medium.com/max/1294/1*Bu5PVklukwg3oxw3ea0qjw.jpeg)
+
 ## Hardware and components
 
 Purchase this codebot component bundle from [codingcoach.com](https://codingcoach.net/codebot)
